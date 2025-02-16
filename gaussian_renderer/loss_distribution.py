@@ -6,6 +6,7 @@ import time
 import diff_gaussian_rasterization
 import math
 from utils.loss_utils import l1_loss, ssim, lncc, get_img_grad_weight
+from utils.general_utils import get_expon_lr_func
 def get_touched_tile_rect(touched_locally):
     nonzero_pos = touched_locally.nonzero()
     min_tile_y = nonzero_pos[:, 0].min().item()
@@ -2739,6 +2740,20 @@ def batched_loss_computation(
                     else:
                         normal_loss = weight * (((depth_normal[:, coverage_min_y:coverage_max_y, :] - normal[:, coverage_min_y:coverage_max_y, :])).abs().sum(0)).mean()
                     loss += (normal_loss)
+            
+                depth = render_pkg["plane_depth"]
+                if depth is not None:
+                    depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=100000)
+                    if depth_l1_weight(iterations) > 0 and camera.depth_reliable:
+                        invDepth = 1/depth
+                        mono_invdepth = camera.invdepthmap.cuda()
+                        # depth_mask = viewpoint_cam.depth_mask.cuda()
+
+                        Ll1depth_pure = torch.abs((invDepth[:, coverage_min_y:coverage_max_y, :]  - mono_invdepth[:, coverage_min_y:coverage_max_y, :]) ).mean()
+                        Ll1depth = depth_l1_weight(iterations) * Ll1depth_pure 
+                        loss += Ll1depth
+
+
 
             rank = strategy.gpu_ids.index(utils.GLOBAL_RANK)
 

@@ -44,6 +44,7 @@ class CameraInfo(NamedTuple):
     image: np.array
     image_path: str
     image_name: str
+    depth_params : dict
     width: int
     height: int
 
@@ -80,7 +81,7 @@ def getNerfppNorm(cam_info):
     return {"translate": translate, "radius": radius}
 
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, depths_params):
     args = utils.get_args()
     cam_infos = []
     utils.print_rank_0("Loading cameras from disk...")
@@ -126,6 +127,14 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         )  # this is a lazy load, the image is not loaded yet
         width, height = image.size
 
+        depth_params = None
+        if depths_params is not None:
+            try:
+                depth_params = depths_params[image_name]
+            except:
+                print("\n", key, "not found in depths_params")
+
+
         cam_info = CameraInfo(
             uid=uid,
             R=R,
@@ -135,6 +144,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
             image=None,
             image_path=image_path,
             image_name=image_name,
+            depth_params = depth_params,
             width=width,
             height=height,
         )
@@ -204,10 +214,32 @@ def readColmapSceneInfo(path, images, eval, llffhold=83):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     reading_dir = "images" if images == None else images
+    depth_params_file = os.path.join(path, "sparse/0", "depth_params.json")
+    try:
+            with open(depth_params_file, "r") as f:
+                depths_params = json.load(f)
+            all_scales = np.array([depths_params[key]["scale"] for key in depths_params])
+            if (all_scales > 0).sum():
+                med_scale = np.median(all_scales[all_scales > 0])
+            else:
+                med_scale = 0
+            for key in depths_params:
+                depths_params[key]["med_scale"] = med_scale
+
+    except FileNotFoundError:
+        print(f"Error: depth_params.json file not found at path '{depth_params_file}'.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred when trying to open depth_params.json file: {e}")
+        sys.exit(1)
+
+
+
     cam_infos_unsorted = readColmapCameras(
         cam_extrinsics=cam_extrinsics,
         cam_intrinsics=cam_intrinsics,
         images_folder=os.path.join(path, reading_dir),
+        depths_params=depths_params,
     )
     cam_infos = sorted(cam_infos_unsorted.copy(), key=lambda x: x.image_name)
 

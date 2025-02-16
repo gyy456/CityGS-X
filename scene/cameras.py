@@ -16,7 +16,7 @@ from utils.graphics_utils import getWorld2View2, getProjectionMatrix, fov2focal
 from utils.general_utils import get_args, get_log_file
 import utils.general_utils as utils
 import time
-
+import os, cv2
 
 class Camera(nn.Module):
     def __init__(
@@ -32,6 +32,8 @@ class Camera(nn.Module):
         image_height,
         image_width,
         uid,
+        depth_params=None,
+        image_path = None,
         trans=np.array([0.0, 0.0, 0.0]),
         scale=1.0,
     ):
@@ -53,7 +55,7 @@ class Camera(nn.Module):
         self.Fy = fov2focal(FoVy, self.image_height)
         self.Cx = 0.5 * self.image_width
         self.Cy = 0.5 * self.image_height
-
+        self.image_path = image_path
 
         self.image_name = image_name
 
@@ -112,6 +114,31 @@ class Camera(nn.Module):
             )
         ).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+        self.invdepthmap  = None
+        depth_path = self.image_path.replace('images','depths')
+        depth_path = depth_path.replace('jpg','png')
+        if os.path.exists(depth_path):
+            invdepthmap = cv2.imread(depth_path, -1).astype(np.float32) / float(2**16)
+            self.invdepthmap = cv2.resize(invdepthmap, self.resolution)
+            self.invdepthmap[self.invdepthmap < 0] = 0
+            self.depth_reliable = True
+            if depth_params is not None:
+                if depth_params["scale"] < 0.2 * depth_params["med_scale"] or depth_params["scale"] > 5 * depth_params["med_scale"]:
+                    self.depth_reliable = False
+                    # self.depth_mask *= 0
+                
+                if depth_params["scale"] > 0:
+                    self.invdepthmap = self.invdepthmap * depth_params["scale"] + depth_params["offset"]  #统一尺度
+            if self.invdepthmap.ndim != 2:
+                self.invdepthmap = self.invdepthmap[..., 0]
+            self.invdepthmap = torch.from_numpy(self.invdepthmap[None]).to("cuda")
+
+
+
+
+
+
 
     def get_camera2world(self):
         return self.world_view_transform_backup.t().inverse()

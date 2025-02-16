@@ -1601,9 +1601,21 @@ def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  
             cuda_args["stats_collector"]["backward_render_time"] = 0.0
             cuda_args["stats_collector"]["forward_loss_time"] = 0.0
 
-
-
-
+            return_dict =  {
+                # "render": rendered_image,
+                "viewspace_points": None,
+                "viewspace_points_abs": None,
+                "visibility_filter" : None,
+                "radii": None,
+                "out_observe": None,
+                "rendered_normal": None,
+                "plane_depth": None,
+                "rendered_distance": None,
+                "depth_normal": None
+                }
+            out_all_map = None
+            out_observe = None
+            out_plane_depth = None
         else:
             rotation_matrices = quaternion_to_matrix(torch.nn.functional.normalize(rotations_redistributed, p=2, dim=-1))
             smallest_axis_idx =torch.exp(scales_redistributed).min(dim=-1)[1][..., None, None].expand(-1, 3, -1)
@@ -1648,19 +1660,19 @@ def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  
             rendered_alpha = out_all_map[3:4, ]
             rendered_distance = out_all_map[4:5, ]
             depth_normal = render_normal(batched_cameras[cam_id], out_plane_depth.squeeze()) * (rendered_alpha).detach()
-        return_dict =  {
-                    # "render": rendered_image,
-                    "viewspace_points": means2D_redistributed,
-                    "viewspace_points_abs": means2D_abs,
-                    "visibility_filter" : radii_redistributed > 0,
-                    "radii": radii_redistributed,
-                    "out_observe": out_observe,
-                    "rendered_normal": rendered_normal,
-                    "plane_depth": out_plane_depth,
-                    "rendered_distance": rendered_distance,
-                    "depth_normal": depth_normal,
-                    "scales_redistributed": scales_redistributed
-                    }
+            return_dict =  {
+                        # "render": rendered_image,
+                        "viewspace_points": means2D_redistributed,
+                        "viewspace_points_abs": means2D_abs,
+                        "visibility_filter" : radii_redistributed > 0,
+                        "radii": radii_redistributed,
+                        "out_observe": out_observe,
+                        "rendered_normal": rendered_normal,
+                        "plane_depth": out_plane_depth,
+                        "rendered_distance": rendered_distance,
+                        "depth_normal": depth_normal,
+                        "scales_redistributed": scales_redistributed
+                        }
         batched_rendered_image.append(rendered_image)
         batched_out_all_map.append(out_all_map)
         batched_out_observe.append(out_observe)

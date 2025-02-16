@@ -93,6 +93,8 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False):
         image_height = round(orig_h/(args.resolution)),
         image_width = round(orig_w/(args.resolution)),
         uid=id,
+        depth_params=cam_info.depth_params,
+        image_path=cam_info.image_path,
     )
 
 
