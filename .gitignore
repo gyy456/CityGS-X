@@ -15,6 +15,7 @@ old_files
 *.log
 *.out
 __pycache__
+*build*
 *.npy
 scripts/
 data
