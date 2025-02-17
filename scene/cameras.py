@@ -34,6 +34,8 @@ class Camera(nn.Module):
         uid,
         depth_params=None,
         image_path = None,
+        depth_reliables = None,
+        invdepthmaps = None,
         trans=np.array([0.0, 0.0, 0.0]),
         scale=1.0,
     ):
@@ -115,29 +117,27 @@ class Camera(nn.Module):
         ).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
+        # if depth is None:
         self.invdepthmap  = None
         depth_path = self.image_path.replace('images','depths')
         depth_path = depth_path.replace('jpg','png')
-        if os.path.exists(depth_path):
-            invdepthmap = cv2.imread(depth_path, -1).astype(np.float32) / float(2**16)
-            self.invdepthmap = cv2.resize(invdepthmap, self.resolution)
-            self.invdepthmap[self.invdepthmap < 0] = 0
-            self.depth_reliable = True
-            if depth_params is not None:
-                if depth_params["scale"] < 0.2 * depth_params["med_scale"] or depth_params["scale"] > 5 * depth_params["med_scale"]:
-                    self.depth_reliable = False
-                    # self.depth_mask *= 0
+        # if os.path.exists(depth_path):
+        #     invdepthmap = cv2.imread(depth_path, -1).astype(np.float32) / float(2**16)
+        #     self.invdepthmap = cv2.resize(invdepthmap, self.resolution)
+        #     self.invdepthmap[self.invdepthmap < 0] = 0
+        self.depth_reliable = depth_reliables
+            # if depth_params is not None:
+            #     if depth_params["scale"] < 0.2 * depth_params["med_scale"] or depth_params["scale"] > 5 * depth_params["med_scale"]:
+            #         self.depth_reliable = False
+            #         # self.depth_mask *= 0
                 
-                if depth_params["scale"] > 0:
-                    self.invdepthmap = self.invdepthmap * depth_params["scale"] + depth_params["offset"]  #统一尺度
-            if self.invdepthmap.ndim != 2:
-                self.invdepthmap = self.invdepthmap[..., 0]
-            self.invdepthmap = torch.from_numpy(self.invdepthmap[None]).to("cuda")
-
-
-
-
-
+            #     if depth_params["scale"] > 0:
+            #         self.invdepthmap = self.invdepthmap * depth_params["scale"] + depth_params["offset"]  #统一尺度
+            # if self.invdepthmap.ndim != 2:
+            #     self.invdepthmap = self.invdepthmap[..., 0]
+        # self.invdepthmap = invdepthmaps
+        # if args.preload_dataset_to_gpu and depth_reliables is not None:
+        #     self.invdepthmap = self.invdepthmap.to("cuda")
 
 
     def get_camera2world(self):

@@ -256,8 +256,6 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
                     dist.barrier()
                     param.grad = param.grad / utils.DEFAULT_GROUP.size()
 
-
-
         with torch.no_grad():
             # Adjust workload division strategy.
             globally_sync_for_timer()

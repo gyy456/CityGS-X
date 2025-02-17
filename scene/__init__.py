@@ -101,7 +101,7 @@ class Scene:
             * (len(scene_info.train_cameras) + len(scene_info.test_cameras))
             * orig_w//args.resolution
             * orig_h//args.resolution
-            * 3
+            * (3+1)
             / 1e9
         )
         log_file.write(f"Dataset size: {dataset_size_in_GB} GB\n")

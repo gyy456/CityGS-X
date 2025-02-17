@@ -22,9 +22,9 @@ import torch
 from PIL import Image
 from kornia import create_meshgrid
 
+import cv2
 
-
-
+import os
 
 
 
@@ -33,7 +33,7 @@ from kornia import create_meshgrid
 def pix2ndc(v, S):
     return (v * 2.0 + 1.0) / S - 1.0
 
-def loadCam(args, id, cam_info, decompressed_image=None, return_image=False):
+def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, depth_reliables = None, invdepthmaps = None):
     orig_w, orig_h = cam_info.width, cam_info.height
     assert (
         orig_w // args.resolution == utils.get_img_width() and orig_h // args.resolution == utils.get_img_height()
@@ -79,7 +79,31 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False):
         loaded_mask = None
 
     if return_image:
-        return gt_image
+
+        depth_path = cam_info.image_path.replace('images','depths')
+        depth_path = depth_path.replace('jpg','png')
+        if os.path.exists(depth_path):
+            invdepthmap = cv2.imread(depth_path, -1).astype(np.float32) / float(2**16)
+            resolution = (round(orig_w/(args.resolution)), round(orig_h/(args.resolution)))
+            invdepthmap = cv2.resize(invdepthmap, resolution)
+            invdepthmap[invdepthmap < 0] = 0
+            depth_reliable = True
+            depth_params = cam_info.depth_params
+            if depth_params is not None:
+                if depth_params["scale"] < 0.2 * depth_params["med_scale"] or depth_params["scale"] > 5 * depth_params["med_scale"]:
+                    depth_reliable = False
+                    # self.depth_mask *= 0
+                if depth_params["scale"] > 0:
+                    invdepthmap = invdepthmap * depth_params["scale"] + depth_params["offset"]  #统一尺度
+            if invdepthmap.ndim != 2:
+                invdepthmap = invdepthmap[..., 0]
+            invdepthmap = torch.from_numpy(invdepthmap[None])
+
+
+
+
+
+        return gt_image, depth_reliable, invdepthmap
 
     return Camera(
         colmap_id=cam_info.uid,
@@ -95,6 +119,8 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False):
         uid=id,
         depth_params=cam_info.depth_params,
         image_path=cam_info.image_path,
+        depth_reliables = depth_reliables, 
+        invdepthmaps = invdepthmaps
     )
 
 
@@ -107,10 +133,12 @@ def load_decompressed_image(params):
 def decompressed_images_from_camInfos_multiprocess(cam_infos, args):
     args = get_args()
     decompressed_images = []
+    depth_reliables= []
+    invdepthmaps = []
     total_cameras = len(cam_infos)
 
     # Create a pool of processes
-    with multiprocessing.Pool(processes=2) as pool:
+    with multiprocessing.Pool(processes=4) as pool:
         # Prepare data for processing
         tasks = [(args, id, cam_info) for id, cam_info in enumerate(cam_infos)]
 
@@ -123,11 +151,13 @@ def decompressed_images_from_camInfos_multiprocess(cam_infos, args):
                 disable=(utils.LOCAL_RANK != 0),
             )
         )
-
+        # print(len(results))
         for id, result in enumerate(results):
-            decompressed_images.append(result)
+            decompressed_images.append(result[0])
+            depth_reliables.append(result[1])
+            invdepthmaps.append(result[2])
 
-    return decompressed_images
+    return decompressed_images, depth_reliables, invdepthmaps
 
 
 def decompress_and_scale_image(cam_info):
@@ -260,12 +290,15 @@ def cameraList_from_camInfos(cam_infos, args):
     args = get_args()
 
     if utils.DEFAULT_GROUP.size() > 1 and args.multiprocesses_image_loading:
-        decompressed_images = decompressed_images_from_camInfos_multiprocess(
+        decompressed_images, depth_reliables, invdepthmaps = decompressed_images_from_camInfos_multiprocess(
             cam_infos, args
         )
         # decompressed_images = decompressed_images_from_camInfos_multiprocess_sharedmem(cam_infos, resolution_scale, args)
     else:
         decompressed_images = [None for _ in cam_infos]
+        depth_reliables = [None for _ in cam_infos]
+        invdepthmaps = [None for _ in cam_infos]
+        
 
     camera_list = []
     for id, c in tqdm(
@@ -278,6 +311,8 @@ def cameraList_from_camInfos(cam_infos, args):
                 c,
                 decompressed_image=decompressed_images[id],
                 return_image=False,
+                depth_reliables = depth_reliables[id], 
+                invdepthmaps = invdepthmaps[id]
             )
         )
 

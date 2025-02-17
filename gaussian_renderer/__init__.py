@@ -11,6 +11,7 @@
 
 import torch
 import math
+import cv2
 from diff_gaussian_rasterization import (
     GaussianRasterizationSettings,
     GaussianRasterizer,
@@ -1619,13 +1620,16 @@ def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  
         else:
             rotation_matrices = quaternion_to_matrix(torch.nn.functional.normalize(rotations_redistributed, p=2, dim=-1))
             smallest_axis_idx =torch.exp(scales_redistributed).min(dim=-1)[1][..., None, None].expand(-1, 3, -1)
+            
             normal_global = rotation_matrices.gather(2, smallest_axis_idx).squeeze(dim=2)
+            
             gaussian_to_cam_global = batched_cameras[cam_id].camera_center - xyz_redistributed
             neg_mask = (normal_global * gaussian_to_cam_global).sum(-1) < 0.0
             normal_global[neg_mask] = -normal_global[neg_mask]
             global_normal = normal_global
+            
             local_normal = global_normal @ batched_cameras[cam_id].world_view_transform[:3,:3]
-            pts_in_cam = torch.zeros((means2D_redistributed.shape[0], 3)).cuda().float() @ batched_cameras[cam_id].world_view_transform[:3,:3] + batched_cameras[cam_id].world_view_transform[3,:3]
+            pts_in_cam = xyz_redistributed @ batched_cameras[cam_id].world_view_transform[:3,:3] + batched_cameras[cam_id].world_view_transform[3,:3]
             depth_z = pts_in_cam[:, 2]
             local_distance = (local_normal * pts_in_cam).sum(-1).abs()
             input_all_map = torch.zeros((means2D_redistributed.shape[0], 5)).cuda().float()
@@ -1659,6 +1663,7 @@ def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  
             rendered_normal = out_all_map[0:3]
             rendered_alpha = out_all_map[3:4, ]
             rendered_distance = out_all_map[4:5, ]
+
             depth_normal = render_normal(batched_cameras[cam_id], out_plane_depth.squeeze()) * (rendered_alpha).detach()
             return_dict =  {
                         # "render": rendered_image,
