@@ -267,10 +267,6 @@ class GaussianModel:
         return self.rotation_activation(self._rotation)
 
     @property
-    def get_xyz(self):
-        return self._xyz
-
-    @property
     def get_features(self):
         features_dc = self._features_dc
         features_rest = self._features_rest
@@ -373,7 +369,6 @@ class GaussianModel:
         self._anchor_mask = (self._level.squeeze(dim=1) <= int_level)
 
 
-
     def octree_sample(self, data, init_pos):
         torch.cuda.synchronize(); t0 = time.time()
         self.positions = torch.empty(0, 3).float().cuda()
@@ -384,6 +379,10 @@ class GaussianModel:
             new_level = torch.ones(new_positions.shape[0], dtype=torch.int, device="cuda") * cur_level
             self.positions = torch.concat((self.positions, new_positions), dim=0)
             self._level = torch.concat((self._level, new_level), dim=0)
+        # print(f'before unique: {self._level.shape[0]}')
+        # self.positions, index = torch.unique(self.positions, dim=0, return_inverse = True)
+        # self._level = self._level[index]
+        # print(f'after unique: {self._level.shape[0]}')
         torch.cuda.synchronize(); t1 = time.time()
         time_diff = t1 - t0
         print(f"Building octree time: {int(time_diff // 60)} min {time_diff % 60} sec")
@@ -416,7 +415,7 @@ class GaussianModel:
         box_max = torch.max(points)*self.extend
         box_d = box_max - box_min
         if self.base_layer < 0:
-            default_voxel_size = 0.0001
+            default_voxel_size = 0.001
             self.base_layer = torch.round(torch.log2(box_d/default_voxel_size)).int().item()-(self.levels//2)+1
         self.voxel_size = box_d/(float(self.fork) ** self.base_layer)
         self.init_pos = torch.tensor([box_min, box_min, box_min]).float().cuda()
@@ -445,9 +444,23 @@ class GaussianModel:
         rots[:, 0] = 1
         opacities = inverse_sigmoid(0.1 * torch.ones((self.positions.shape[0], 1), dtype=torch.float, device="cuda"))
 
+        # random_idx = torch.zeros(
+        #     self.positions.shape[0],
+        #     device="cuda",
+        #     dtype=int
+        # )
+
+
+        # # 将 random_idx 广播到其他进程
+        #     # dist.broadcast(random_idx, src=0)
+        # if utils.DEFAULT_GROUP.size() > 1:
+        #     dist.broadcast(random_idx, src=0, group=utils.DEFAULT_GROUP)
+
+        # anchor = self.positions[random_idx]
+        # self._level = self._level[random_idx]
+        # scales = scales[random_idx]
         anchor = self.positions
-        extra_level = torch.zeros(self._anchor.shape[0], dtype=torch.float, device="cuda")
-        anchor_mask = torch.ones(self._anchor.shape[0], dtype=torch.bool, device="cuda")
+
 
 
         args = utils.get_args()
@@ -457,18 +470,33 @@ class GaussianModel:
             shard_world_size = utils.DEFAULT_GROUP.size()
             shard_rank = utils.DEFAULT_GROUP.rank()
 
-            anchor_ind_l, anchor_ind_r = utils.get_local_chunk_l_r(
-                anchor.shape[0], shard_world_size, shard_rank
-            )
-            anchor = anchor[anchor_ind_l:anchor_ind_r].contiguous()
-            offsets = offsets[anchor_ind_l:anchor_ind_r].contiguous()
-            anchors_feat = anchors_feat[anchor_ind_l:anchor_ind_r].contiguous()
-            scales = scales[anchor_ind_l:anchor_ind_r].contiguous()
-            rots = rots[anchor_ind_l:anchor_ind_r].contiguous()
-            opacities = opacities[anchor_ind_l:anchor_ind_r].contiguous()
-            extra_level = extra_level[anchor_ind_l:anchor_ind_r].contiguous()
-            anchor_mask = anchor_mask[anchor_ind_l:anchor_ind_r].contiguous()
-            self._level = self._level[anchor_ind_l:anchor_ind_r].contiguous()
+            the_idx = shard_rank
+            random_idx = torch.arange(self.positions.shape[0], device="cuda")
+            mask = random_idx % shard_world_size == the_idx
+            index = random_idx[mask]
+
+            # anchor_ind_l, anchor_ind_r = utils.get_local_chunk_l_r(
+            #     anchor.shape[0], shard_world_size, shard_rank
+            # )
+            # anchor = anchor[anchor_ind_l:anchor_ind_r].contiguous()
+            # offsets = offsets[anchor_ind_l:anchor_ind_r].contiguous()
+            # anchors_feat = anchors_feat[anchor_ind_l:anchor_ind_r].contiguous()
+            # scales = scales[anchor_ind_l:anchor_ind_r].contiguous()
+            # rots = rots[anchor_ind_l:anchor_ind_r].contiguous()
+            # opacities = opacities[anchor_ind_l:anchor_ind_r].contiguous()
+            # self._level = self._level[anchor_ind_l:anchor_ind_r].contiguous()
+
+
+            anchor = anchor[index].contiguous()
+            offsets = offsets[index].contiguous()
+            anchors_feat = anchors_feat[index].contiguous()
+            scales = scales[index].contiguous()
+            rots = rots[index].contiguous()
+            opacities = opacities[index].contiguous()
+            self._level = self._level[index].contiguous()
+
+
+
             log_file.write(
                 "rank: {}, Number of anchor points: {}\n".format(
                     utils.GLOBAL_RANK, anchor.shape[0]
@@ -908,45 +936,47 @@ class GaussianModel:
         catted_opacity = []
         catted_scaling = []
         catted_rotation = []
+        
         for rk in range(world_size):
-            one_checkpoint_path = (
-                folder + "/point_cloud_rk" + str(rk) + "_ws" + str(world_size) + ".ply"
-            )
-            anchor_feat, level, extra_level, offset, anchor, scaling, opacity, rotation, anchor_mask, levels = (
-                self.load_raw_ply(one_checkpoint_path)
-            )
-            catted_anchor_feat.append(anchor_feat)
-            catted_offset.append(offset)
-            catted_levels.append(level)
-            catted_extra_level.append(extra_level)
-            catted_anchor.append(anchor)
-            catted_opacity.append(opacity)
-            catted_scaling.append(scaling)
-            catted_rotation.append(rotation)
-        catted_anchor_feat = np.concatenate(catted_anchor_feat, axis=0)
-        catted_offset = np.concatenate(catted_offset, axis=0)
-        catted_levels = np.concatenate(catted_levels, axis=0)
-        catted_opacity = np.concatenate(catted_opacity, axis=0)
-        catted_scaling = np.concatenate(catted_scaling, axis=0)
-        catted_rotation = np.concatenate(catted_rotation, axis=0)
-        catted_extra_level = np.concatenate(catted_extra_level, axis=0)
-        catted_anchor = np.concatenate(catted_anchor, axis=0)
-        self._anchor_feat = nn.Parameter(torch.tensor(catted_anchor_feat, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._level = torch.tensor(catted_levels, dtype=torch.int, device="cuda")
-        self._extra_level = torch.tensor(catted_extra_level, dtype=torch.float, device="cuda").squeeze(dim=1)
-        self._offset = nn.Parameter(torch.tensor(catted_offset, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._anchor = nn.Parameter(torch.tensor(catted_anchor, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._scaling = nn.Parameter(torch.tensor(catted_scaling, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._opacity = nn.Parameter(torch.tensor(catted_opacity, dtype=torch.float, device="cuda").requires_grad_(False))
-        self._rotation = nn.Parameter(torch.tensor(catted_rotation, dtype=torch.float, device="cuda").requires_grad_(False))
-        self._anchor_mask = torch.ones(self._anchor.shape[0], dtype=torch.bool, device="cuda")
-        self.levels = torch.max(self._level) - torch.min(self._level) + 1
-        self.levels = self.levels.int().item()
-        self.active_sh_degree = self.max_sh_degree
-        self.init_level = int(self.levels/2)
+            if utils.GLOBAL_RANK == rk:
+                one_checkpoint_path = (
+                    folder + "/point_cloud_rk" + str(rk) + "_ws" + str(world_size) + ".ply"
+                )
+                anchor_feat, level, extra_level, offset, anchor, scaling, opacity, rotation, anchor_mask, levels = (
+                    self.load_raw_ply(one_checkpoint_path)
+                )
+                catted_anchor_feat.append(anchor_feat)
+                catted_offset.append(offset)
+                catted_levels.append(level)
+                catted_extra_level.append(extra_level)
+                catted_anchor.append(anchor)
+                catted_opacity.append(opacity)
+                catted_scaling.append(scaling)
+                catted_rotation.append(rotation)
+                catted_anchor_feat = np.concatenate(catted_anchor_feat, axis=0)
+                catted_offset = np.concatenate(catted_offset, axis=0)
+                catted_levels = np.concatenate(catted_levels, axis=0)
+                catted_opacity = np.concatenate(catted_opacity, axis=0)
+                catted_scaling = np.concatenate(catted_scaling, axis=0)
+                catted_rotation = np.concatenate(catted_rotation, axis=0)
+                catted_extra_level = np.concatenate(catted_extra_level, axis=0)
+                catted_anchor = np.concatenate(catted_anchor, axis=0)
+                self._anchor_feat = nn.Parameter(torch.tensor(catted_anchor_feat, dtype=torch.float, device="cuda").requires_grad_(True))
+                self._level = torch.tensor(catted_levels, dtype=torch.int, device="cuda")
+                self._extra_level = torch.tensor(catted_extra_level, dtype=torch.float, device="cuda").squeeze(dim=1)
+                self._offset = nn.Parameter(torch.tensor(catted_offset, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
+                self._anchor = nn.Parameter(torch.tensor(catted_anchor, dtype=torch.float, device="cuda").requires_grad_(True))
+                self._scaling = nn.Parameter(torch.tensor(catted_scaling, dtype=torch.float, device="cuda").requires_grad_(True))
+                self._opacity = nn.Parameter(torch.tensor(catted_opacity, dtype=torch.float, device="cuda").requires_grad_(False))
+                self._rotation = nn.Parameter(torch.tensor(catted_rotation, dtype=torch.float, device="cuda").requires_grad_(False))
+                self._anchor_mask = torch.ones(self._anchor.shape[0], dtype=torch.bool, device="cuda")
+                self.levels = torch.max(self._level) - torch.min(self._level) + 1
+                self.levels = self.levels.int().item()
+                self.active_sh_degree = self.max_sh_degree
+                self.init_level = int(self.levels/2)
 
         load_npz = np.load(folder + '/additional_attributes.npz')
-        self.init_pos = torch.tensor(load_npz['init_pos'],device="cuda")#Add by cjq 1.28
+        # self.init_pos = torch.tensor(load_npz['init_pos'],device="cuda")#Add by cjq 1.28
 
     def load_raw_ply(self, path):
         print("Loading ", path)
@@ -993,14 +1023,14 @@ class GaussianModel:
         point_ind_l = chunk * utils.LOCAL_RANK
         point_ind_r = min(chunk * (utils.LOCAL_RANK + 1), anchor.shape[0])
         offsets = offsets.reshape((offsets.shape[0], 3, -1))
-        anchor_feat = np.ascontiguousarray(anchor_feats[point_ind_l:point_ind_r])
-        level = np.ascontiguousarray(levels[point_ind_l:point_ind_r])
-        extra_level = np.ascontiguousarray(extra_levels[point_ind_l:point_ind_r])
-        offset = np.ascontiguousarray(offsets[point_ind_l:point_ind_r])
-        anchor = np.ascontiguousarray(anchor[point_ind_l:point_ind_r])
-        scaling = np.ascontiguousarray(scales[point_ind_l:point_ind_r])
-        opacity = np.ascontiguousarray(opacities[point_ind_l:point_ind_r])
-        rotation = np.ascontiguousarray(rots[point_ind_l:point_ind_r])
+        anchor_feat = np.ascontiguousarray(anchor_feats)
+        level = np.ascontiguousarray(levels)
+        extra_level = np.ascontiguousarray(extra_levels)
+        offset = np.ascontiguousarray(offsets)
+        anchor = np.ascontiguousarray(anchor)
+        scaling = np.ascontiguousarray(scales)
+        opacity = np.ascontiguousarray(opacities)
+        rotation = np.ascontiguousarray(rots)
         anchor_mask = np.ones(anchor.shape[0])
         levels =  1
 
@@ -1156,10 +1186,14 @@ class GaussianModel:
         combined_mask[anchor_visible_mask] = offset_selection_mask
         temp_mask = combined_mask.clone()
         combined_mask[temp_mask] = update_filter
-        
-        grad_norm = torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
+        # if iterations>10000:
+        #     grad_norm = torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True) * pixels[update_filter].unsqueeze(-1)
+        #     self.offset_gradient_accum[combined_mask] += grad_norm
+        #     self.offset_denom[combined_mask] +=  pixels[update_filter].unsqueeze(-1)
+        # else:
+        grad_norm = torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True) * 1
         self.offset_gradient_accum[combined_mask] += grad_norm
-        self.offset_denom[combined_mask] += 1
+        self.offset_denom[combined_mask] +=  1
 
     def _prune_anchor_optimizer(self, mask):
         optimizable_tensors = {}
@@ -1377,6 +1411,10 @@ class GaussianModel:
         grads = self.offset_gradient_accum / self.offset_denom # [N*k, 1]
         grads[grads.isnan()] = 0.0
         grads_norm = torch.norm(grads, dim=-1)
+        # grads_abs = self.xyz_gradient_accum_abs / self.denom_abs
+        # grads_abs[grads_abs.isnan()] = 0.0
+
+
         offset_mask = (self.offset_denom > check_interval*success_threshold*0.5).squeeze(dim=1)
         
         self.anchor_growing(iteration, grads_norm, grad_threshold, update_ratio, extra_ratio, extra_up, offset_mask)
@@ -1428,7 +1466,7 @@ class GaussianModel:
 
 
     def gsplat_add_densification_stats(
-        self, viewspace_point_tensor_grad, update_filter, width, height
+        self, viewspace_point_tensor_grad, update_filter, width, height, pixels
     ):  # the :2] is a weird implementation. It is because viewspace_point_tensor is (N, 3) tensor.
         grad = viewspace_point_tensor_grad  # (N, 2)
         # Normalize the gradients to [-1, 1] screen size
@@ -1436,8 +1474,8 @@ class GaussianModel:
         grad[:, 1] *= height * 0.5
         self.xyz_gradient_accum[update_filter] += torch.norm(
             grad[update_filter, :2], dim=-1, keepdim=True
-        )
-        self.denom[update_filter] += 1
+        ) * pixels[update_filter]
+        self.denom[update_filter] += pixels[update_filter]
 
     def group_for_redistribution(self):
         args = utils.get_args()
@@ -1457,11 +1495,17 @@ class GaussianModel:
             state_from_gpuj.append(
                 torch.zeros(
                     (i2j_send_size[j][comm_group.rank()], *state.shape[1:]),
-                    device="cuda",
+                    device="cuda", dtype = state.dtype
                 )
             )
 
         # print(f"before all_to_all, ws={comm_group.size()}, rank={comm_group.rank()}")
+
+        # 假设 state_from_gpuj 和 state_to_gpuj 是需要检查的张量
+            # if state_from_gpuj.dtype != state_to_gpuj.dtype:
+            #     # 如果不一致，将它们转换为 torch.int32
+            #     state_from_gpuj = state_from_gpuj.to(torch.int32)
+            #     state_to_gpuj = state_to_gpuj.to(torch.int32)
 
         torch.distributed.all_to_all(state_from_gpuj, state_to_gpuj, group=comm_group)
 
@@ -1476,6 +1520,9 @@ class GaussianModel:
     def all2all_tensors_in_optimizer_implementation_1(self, destination, i2j_send_size):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
+            if group["name"] == "mlp_opacity" or group["name"] == "mlp_cov" or group["name"] == "mlp_color":
+                continue
+
             assert len(group["params"]) == 1
             stored_state = self.optimizer.state.get(group["params"][0], None)
             if stored_state is not None:
@@ -1617,7 +1664,7 @@ class GaussianModel:
 
     def get_destination_1(self, world_size):
         # norm p=0
-        return torch.randint(0, world_size, (self.get_xyz.shape[0],), device="cuda")
+        return torch.arange(self.get_anchor.shape[0], device="cuda") % world_size
 
     def need_redistribute_gaussians(self, group):
         args = utils.get_args()
@@ -1626,7 +1673,7 @@ class GaussianModel:
         if utils.get_denfify_iter() == args.redistribute_gaussians_frequency:
             # do redistribution after the first densification.
             return True
-        local_n_3dgs = self.get_xyz.shape[0]
+        local_n_3dgs = self.get_anchor.shape[0]
         all_local_n_3dgs = [None for _ in range(group.size())]
         torch.distributed.all_gather_object(all_local_n_3dgs, local_n_3dgs, group=group)
         if min(all_local_n_3dgs) * args.redistribute_gaussians_threshold < max(
@@ -1644,7 +1691,7 @@ class GaussianModel:
         if not self.need_redistribute_gaussians(comm_group_for_redistribution):
             return
 
-        # Get each 3dgs' destination GPU.
+        # Get each anchors' destination GPU.
         if args.redistribute_gaussians_mode == "random_redistribute":
             # random redistribution to balance the number of gaussians on each GPU.
             destination = self.get_destination_1(comm_group_for_redistribution.size())
@@ -1654,7 +1701,7 @@ class GaussianModel:
                 + args.redistribute_gaussians_mode
             )
 
-        # Count the number of 3dgs to be sent to each GPU.
+        # Count the number of anchors to be sent to each GPU.
         local2j_send_size = torch.bincount(
             destination, minlength=comm_group_for_redistribution.size()
         ).int()
@@ -1679,98 +1726,45 @@ class GaussianModel:
         optimizable_tensors = self.all2all_tensors_in_optimizer(
             destination, i2j_send_size
         )
-        self._xyz = optimizable_tensors["xyz"]
-        self._features_dc = optimizable_tensors["f_dc"]
-        self._features_rest = optimizable_tensors["f_rest"]
+
+
+        self._anchor = optimizable_tensors["anchor"]
+        self._offset = optimizable_tensors["offset"]
+        self._anchor_feat = optimizable_tensors["anchor_feat"]
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
-        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
-        self.sum_visible_count_in_one_batch = torch.zeros(
-            (self.get_xyz.shape[0]), device="cuda"
-        )
+
+
+
+
+        self.opacity_accum = torch.zeros((self.get_anchor.shape[0], 1), device="cuda")
+
+        self.offset_gradient_accum = torch.zeros((self.get_anchor.shape[0]*self.n_offsets, 1), device="cuda")
+        self.offset_denom = torch.zeros((self.get_anchor.shape[0]*self.n_offsets, 1), device="cuda")
+        self.anchor_demon = torch.zeros((self.get_anchor.shape[0], 1), device="cuda")
+
+        # self._level = self._level.unsqueeze(dim=1)
+        self._level = self.all2all_gaussian_state(self._level, destination, i2j_send_size)
+        self._extra_level = self.all2all_gaussian_state(self._extra_level, destination, i2j_send_size)
+        # self._anchor_mask = self.all2all_gaussian_state(self._anchor_mask, destination, i2j_send_size)
+        self._anchor_mask = torch.ones(self._anchor.shape[0], dtype=torch.bool, device="cuda")
+
+
+
         # NOTE: This function is called right after desify_and_prune. Therefore self.xyz_gradient_accum, self.denom and self.max_radii2D are all zero.
         # We do not need to all2all them here.
 
         # should I all2all send_to_gpui_cnt? I think I should not. Because 1. for simplicity now, 2. we should refresh it and do not use too old statistics.
         self.send_to_gpui_cnt = torch.zeros(
-            (self.get_xyz.shape[0], comm_group_for_redistribution.size()),
+            (self.get_anchor.shape[0], comm_group_for_redistribution.size()),
             dtype=torch.int,
             device="cuda",
         )
 
         torch.cuda.empty_cache()
-    def redistribute_gaussians(self):
-        args = utils.get_args()
-        if args.redistribute_gaussians_mode == "no_redistribute":
-            return
 
-        comm_group_for_redistribution = self.group_for_redistribution()
-        if not self.need_redistribute_gaussians(comm_group_for_redistribution):
-            return
-
-        # Get each 3dgs' destination GPU.
-        if args.redistribute_gaussians_mode == "random_redistribute":
-            # random redistribution to balance the number of gaussians on each GPU.
-            destination = self.get_destination_1(comm_group_for_redistribution.size())
-        else:
-            raise ValueError(
-                "Invalid redistribute_gaussians_mode: "
-                + args.redistribute_gaussians_mode
-            )
-
-        # Count the number of 3dgs to be sent to each GPU.
-        local2j_send_size = torch.bincount(
-            destination, minlength=comm_group_for_redistribution.size()
-        ).int()
-        assert (
-            len(local2j_send_size) == comm_group_for_redistribution.size()
-        ), "local2j_send_size: " + str(local2j_send_size)
-
-        i2j_send_size = torch.zeros(
-            (
-                comm_group_for_redistribution.size(),
-                comm_group_for_redistribution.size(),
-            ),
-            dtype=torch.int,
-            device="cuda",
-        )
-        torch.distributed.all_gather_into_tensor(
-            i2j_send_size, local2j_send_size, group=comm_group_for_redistribution
-        )
-        i2j_send_size = i2j_send_size.cpu().numpy().tolist()
-        # print("rank", utils.LOCAL_RANK, "local2j_send_size: ", local2j_send_size, "i2j_send_size: ", i2j_send_size)
-
-        optimizable_tensors = self.all2all_tensors_in_optimizer(
-            destination, i2j_send_size
-        )
-        self._xyz = optimizable_tensors["xyz"]
-        self._features_dc = optimizable_tensors["f_dc"]
-        self._features_rest = optimizable_tensors["f_rest"]
-        self._opacity = optimizable_tensors["opacity"]
-        self._scaling = optimizable_tensors["scaling"]
-        self._rotation = optimizable_tensors["rotation"]
-
-        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
-        self.sum_visible_count_in_one_batch = torch.zeros(
-            (self.get_xyz.shape[0]), device="cuda"
-        )
-        # NOTE: This function is called right after desify_and_prune. Therefore self.xyz_gradient_accum, self.denom and self.max_radii2D are all zero.
-        # We do not need to all2all them here.
-
-        # should I all2all send_to_gpui_cnt? I think I should not. Because 1. for simplicity now, 2. we should refresh it and do not use too old statistics.
-        self.send_to_gpui_cnt = torch.zeros(
-            (self.get_xyz.shape[0], comm_group_for_redistribution.size()),
-            dtype=torch.int,
-            device="cuda",
-        )
-
-        torch.cuda.empty_cache()
 
 
 def get_sparse_ids(tensors):

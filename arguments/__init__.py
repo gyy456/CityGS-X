@@ -65,8 +65,8 @@ class AuxiliaryParams(ParamGroup):
     def __init__(self, parser, sentinel=False):
         self.debug_from = -1
         self.detect_anomaly = False
-        self.test_iterations = [7000, 50_000, 100_000]
-        self.save_iterations = []
+        self.test_iterations = [step for step in range(5000, 105000, 5000)]
+        self.save_iterations = [100_000]
         self.quiet = False
         self.checkpoint_iterations = []
         self.start_checkpoint = ""
@@ -212,9 +212,10 @@ class OptimizationParams(ParamGroup):
         self.densification_interval = 100
         self.opacity_reset_interval = 3000
         self.densify_from_iter = 500
-        self.densify_until_iter = 50000
+        self.densify_until_iter = self.iterations//2
         self.densify_grad_threshold = 0.0002
         self.densify_memory_limit_percentage = 0.9
+        self.densify_memory_start_percentage = 0.7
         self.disable_auto_densification = False
         self.opacity_reset_until_iter = -1
         self.random_background = False
@@ -224,10 +225,18 @@ class OptimizationParams(ParamGroup):
 
         self.wo_image_weight = False
         self.single_view_weight = 0.015
-        self.single_view_weight_from_iter = 7000
+        self.single_view_weight_from_iter = 10000
+        self.multi_view_weight_from_iter = 10000
+        self.scale_loss_from_iter = 0
         self.depth_l1_weight_init = 1.0
         self.depth_l1_weight_final = 0.01
-
+        self.dpt_loss_from_iter = 10000
+        self.multi_view_pixel_noise_th = 1
+        self.multi_view_patch_size = 3
+        self.multi_view_geo_weight = 0.03
+        self.multi_view_ncc_weight = 0.15
+        self.wo_use_geo_occ_aware = False
+        # self.load_depth = True
         super().__init__(parser, "Optimization Parameters")
 
 
@@ -246,7 +255,7 @@ class DistributionParams(ParamGroup):
         self.gaussians_distribution = True
         self.redistribute_gaussians_mode = "random_redistribute"  # "no_redistribute"
         self.redistribute_gaussians_frequency = (
-            1000000 # redistribution frequency for 3DGS storage location.
+            10 # redistribution frequency for 3DGS storage location.
         )
         self.redistribute_gaussians_threshold = (
             1.1  # threshold to apply redistribution for 3DGS storage location
@@ -263,11 +272,12 @@ class DistributionParams(ParamGroup):
             False  # By default, we do not preload dataset to GPU.
         )
         self.preload_dataset_to_gpu_threshold = (
-            5  # unit is GB, by default 10GB memory limit for dataset.
+            3  # unit is GB, by default 10GB memory limit for dataset.
         )
         self.multiprocesses_image_loading = True
         self.num_train_cameras = -1
         self.num_test_cameras = -1
+
 
         super().__init__(parser, "Distribution Parameters")
 

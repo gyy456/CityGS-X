@@ -34,8 +34,12 @@ class Camera(nn.Module):
         uid,
         depth_params=None,
         image_path = None,
-        depth_reliables = None,
+        depth_reliables = False,
         invdepthmaps = None,
+        normal_mask = None, 
+        noraml_gt = None,
+        depth_mask = None,
+        resized_image_gray = None ,
         trans=np.array([0.0, 0.0, 0.0]),
         scale=1.0,
     ):
@@ -135,17 +139,30 @@ class Camera(nn.Module):
             #         self.invdepthmap = self.invdepthmap * depth_params["scale"] + depth_params["offset"]  #统一尺度
             # if self.invdepthmap.ndim != 2:
             #     self.invdepthmap = self.invdepthmap[..., 0]
-        # self.invdepthmap = invdepthmaps
+        self.invdepthmap = invdepthmaps
         # if args.preload_dataset_to_gpu and depth_reliables is not None:
         #     self.invdepthmap = self.invdepthmap.to("cuda")
-
-
+        self.normal_mask = normal_mask
+        self.noraml_gt = noraml_gt
+        self.depth_mask = depth_mask
+        self.ncc_scale = 1
+        if resized_image_gray is not None:
+            self.image_gray = resized_image_gray.clamp(0.0, 1.0)
     def get_camera2world(self):
         return self.world_view_transform_backup.t().inverse()
     def get_calib_matrix_nerf(self, scale=1.0):
         intrinsic_matrix = torch.tensor([[self.Fx/scale, 0, self.Cx/scale], [0, self.Fy/scale, self.Cy/scale], [0, 0, 1]]).float()
         extrinsic_matrix = self.world_view_transform.transpose(0,1).contiguous() # cam2world
         return intrinsic_matrix, extrinsic_matrix
+    def get_rays(self, scale=1.0):
+        W, H = int(self.image_width/scale), int(self.image_height/scale)
+        ix, iy = torch.meshgrid(
+            torch.arange(W), torch.arange(H), indexing='xy')
+        rays_d = torch.stack(
+                    [(ix-self.Cx/scale) / self.Fx * scale,
+                    (iy-self.Cy/scale) / self.Fy * scale,
+                    torch.ones_like(ix)], -1).float().cuda()
+        return rays_d
     def update(self, dx, dy, dz):
         # Update the position of this camera pose. TODO: support updating rotation of camera pose.
         with torch.no_grad():
@@ -176,7 +193,17 @@ class Camera(nn.Module):
                 )
             ).squeeze(0)
             self.camera_center = self.world_view_transform.inverse()[3, :3]
-
+    def get_k(self, scale=1.0):
+        K = torch.tensor([[self.Fx / scale, 0, self.Cx / scale],
+                        [0, self.Fy / scale, self.Cy / scale],
+                        [0, 0, 1]]).cuda()
+        return K
+    
+    def get_inv_k(self, scale=1.0):
+        K_T = torch.tensor([[scale/self.Fx, 0, -self.Cx/self.Fx],
+                            [0, scale/self.Fy, -self.Cy/self.Fy],
+                            [0, 0, 1]]).cuda()
+        return K_T
 
 class MiniCam:
     def __init__(

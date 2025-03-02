@@ -46,3 +46,5 @@ datasets
 train.sh
 torch_scatter-2.1.1+pt20cu118-cp38-cp38-linux_x86_64.whl
 sub_pgsr/diff-gaussian-rasterization/build
+huace_street.zip
+huace_street

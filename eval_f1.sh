@@ -1,0 +1,2 @@
+python eval_f1.py --ply_path_pred results/eval/5be3ae47f44e235bdbbc9771_PGSR/possion_mesh/tsdf_fusion.ply \
+            --ply_path_gt datasets/BlendMVS/5be3ae47f44e235bdbbc9771/tsdf_fusion.ply --dtau 0.5

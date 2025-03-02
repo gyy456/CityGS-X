@@ -7,6 +7,33 @@ import diff_gaussian_rasterization
 import math
 from utils.loss_utils import l1_loss, ssim, lncc, get_img_grad_weight
 from utils.general_utils import get_expon_lr_func
+from utils.image_utils import psnr, dilate, erode
+import torch.nn.functional as F
+from multi_view_precess import get_points_from_depth, get_points_depth_in_depth_map
+import numpy as np
+
+def patch_warp(H, uv):
+    B, P = uv.shape[:2]
+    H = H.view(B, 3, 3)
+    ones = torch.ones((B,P,1), device=uv.device)
+    homo_uv = torch.cat((uv, ones), dim=-1)
+
+    grid_tmp = torch.einsum("bik,bpk->bpi", H, homo_uv)
+    grid_tmp = grid_tmp.reshape(B, P, 3)
+    grid = grid_tmp[..., :2] / (grid_tmp[..., 2:] + 1e-10)
+    return grid
+
+
+def patch_offsets(h_patch_size, device):
+    offsets = torch.arange(-h_patch_size, h_patch_size + 1, device=device)
+    return torch.stack(torch.meshgrid(offsets, offsets)[::-1], dim=-1).view(1, -1, 2)
+
+
+
+
+
+
+
 def get_touched_tile_rect(touched_locally):
     nonzero_pos = touched_locally.nonzero()
     min_tile_y = nonzero_pos[:, 0].min().item()
@@ -2566,6 +2593,7 @@ def final_system_loss_computation(
     timers.start("local_loss_computation")
     torch.cuda.synchronize()
     start_time = time.time()
+    # print(viewpoint_cam.image_name)
     pixelwise_Ll1 = pixelwise_l1_with_mask(
         local_image_rect, local_image_rect_gt, local_image_rect_pixels_compute_locally
     )
@@ -2604,62 +2632,6 @@ def depths_double_to_points(view, depthmap1, depthmap2):
 
 
 
-def point_double_to_normal(view, points1, points2):
-    points = torch.stack([points1, points2],dim=0)
-    output = torch.zeros_like(points)
-    dx = points[...,2:, 1:-1] - points[...,:-2, 1:-1]
-    dy = points[...,1:-1, 2:] - points[...,1:-1, :-2]
-    normal_map = torch.nn.functional.normalize(torch.cross(dx, dy, dim=1), dim=1)
-    output[...,1:-1, 1:-1] = normal_map
-    return output
-
-def depth_double_to_normal(view, depth1, depth2):
-    points1, points2 = depths_double_to_points(view, depth1, depth2)
-    return point_double_to_normal(view, points1, points2)
-
-
-
-
-
-def final_depth_loss_computation(
-    rendered_expected_depth, rendered_median_depth, rendered_median_coord, batched_rendered_coord, rendered_normal,viewpoint_cam, compute_locally, strategy, statistic_collector
-):
-    timers = utils.get_timers()
-    args = utils.get_args()
-
-    timers.start("prepare_image_rect_and_mask")
-    assert (
-        utils.GLOBAL_RANK in strategy.gpu_ids
-    ), "The current gpu must be used to render this camera."
-    rank = strategy.gpu_ids.index(utils.GLOBAL_RANK)
-    tile_ids_l, tile_ids_r = (
-        strategy.division_pos[rank],
-        strategy.division_pos[rank + 1],
-    )
-    coverage_min_y, coverage_max_y = get_coverage_y_min_max(tile_ids_l, tile_ids_r)
-
-    # local_image_rect = image[:, coverage_min_y:coverage_max_y, :].contiguous()
-    if True:
-        if True:
-            rendered_expected_depth: torch.Tensor = rendered_expected_depth
-            rendered_median_depth: torch.Tensor = rendered_median_depth
-            rendered_normal: torch.Tensor = rendered_normal[:, coverage_min_y:coverage_max_y, :]
-            depth_middepth_normal = depth_double_to_normal(viewpoint_cam, rendered_expected_depth, rendered_median_depth)[..., coverage_min_y:coverage_max_y, :]
-        else:
-            rendered_expected_coord: torch.Tensor = batched_rendered_coord
-            rendered_median_coord: torch.Tensor = rendered_median_coord
-            rendered_normal: torch.Tensor = rendered_normal
-            depth_middepth_normal = point_double_to_normal(viewpoint_cam, rendered_expected_coord, rendered_median_coord)
-        depth_ratio = 0.6
-        normal_error_map = (1 - (rendered_normal.unsqueeze(0) * depth_middepth_normal).sum(dim=1))
-        depth_normal_loss = (1-depth_ratio) * normal_error_map[0].mean() + depth_ratio * normal_error_map[1].mean()
-    else:
-        lambda_depth_normal = 0
-        depth_normal_loss = torch.tensor([0],dtype=torch.float32,device="cuda")
-
-    return depth_normal_loss
-
-
 def batched_loss_computation(
     batched_image,
     batched_return_dict,
@@ -2669,6 +2641,8 @@ def batched_loss_computation(
     batched_statistic_collector,
     iterations,
     opt,
+    batched_return_dict_nearest,
+    batched_nearest_cameras,
 ):
     args = utils.get_args()
     timers = utils.get_timers()
@@ -2684,6 +2658,8 @@ def batched_loss_computation(
         # compute_locally,
         strategy,
         statistic_collector,
+        nearest_render_pkg,
+        nearest_cam,
     ) in enumerate(
         zip(
             batched_image,
@@ -2692,6 +2668,8 @@ def batched_loss_computation(
             # batched_compute_locally,
             batched_strategies,
             batched_statistic_collector,
+            batched_return_dict_nearest,
+            batched_nearest_cameras,
         )
     ):
         if image is None:  # This image is not rendered locally.
@@ -2710,56 +2688,248 @@ def batched_loss_computation(
             loss = (1.0 - args.lambda_dssim) * Ll1 + args.lambda_dssim * (
                 1.0 - ssim_loss
             )
+            if torch.isnan(loss) :
+                print(f'NAN with rgb:{camera.image_name}' )
+                continue
             batched_losses.append([Ll1, ssim_loss])
             # print(f"ssim_loss: {1-ssim_loss}")
+            if iterations > opt.scale_loss_from_iter :
+                visibility_filter = render_pkg["visibility_filter"]
+                if visibility_filter is not None:
+                    if visibility_filter.sum() > 0:
+                        if iterations < opt.single_view_weight_from_iter * 2:
+                            weight = 10.0
+                        else:
+                            weight = 4.0
+                        # weight = 25
+                        scale = (render_pkg["scales_redistributed"])[visibility_filter]
+                        sorted_scale, _ = torch.sort(scale, dim=-1)
+                        min_scale_loss = sorted_scale[...,0]
+                        loss += weight * min_scale_loss.mean()
+                            # if scale.shape[0] > 0:                        #防止高斯过大或过小
+                            #     scaling_reg = scale.prod(dim=1).mean()
+                            # else:
+                            #     scaling_reg = torch.tensor(0.0, device="cuda")
+                            # loss += 0.01 * scaling_reg # 0.01
 
-            visibility_filter = render_pkg["visibility_filter"]
-            if visibility_filter is not None:
-                scale = torch.exp(render_pkg["scales_redistributed"])[visibility_filter]
-                sorted_scale, _ = torch.sort(scale, dim=-1)
-                min_scale_loss = sorted_scale[...,0]
-                loss += 25 * min_scale_loss.mean()
+
+            rank = strategy.gpu_ids.index(utils.GLOBAL_RANK)
+            tile_ids_l, tile_ids_r = (
+                strategy.division_pos[rank],
+                strategy.division_pos[rank + 1],
+            )
+            coverage_min_y, coverage_max_y = get_coverage_y_min_max(tile_ids_l, tile_ids_r)
+
             if iterations > opt.single_view_weight_from_iter:
                 weight = opt.single_view_weight
                 normal = render_pkg["rendered_normal"]
                 depth_normal = render_pkg["depth_normal"]
-                if normal is not None:
-                    gt_image = torch.clamp(camera.original_image / 255.0, 0.0, 1.0)
-                    rank = strategy.gpu_ids.index(utils.GLOBAL_RANK)
-                    tile_ids_l, tile_ids_r = (
-                        strategy.division_pos[rank],
-                        strategy.division_pos[rank + 1],
-                    )
-                    coverage_min_y, coverage_max_y = get_coverage_y_min_max(tile_ids_l, tile_ids_r)
+                # if normal is not None:
+                gt_image = torch.clamp(camera.original_image / 255.0, 0.0, 1.0)
 
-                    image_weight = (1.0 - get_img_grad_weight(gt_image[:, coverage_min_y:coverage_max_y, :]))
-                    image_weight = (image_weight).clamp(0,1).detach() ** 2
-                    if not opt.wo_image_weight:
-                        # image_weight = erode(image_weight[None,None]).squeeze()
+                image_weight = (1.0 - get_img_grad_weight(gt_image))
+                image_weight = (image_weight).clamp(0,1).detach() ** 2
+                # image_weight = erode(image_weight[None,None]).squeeze()
+                try:
+                    with torch.no_grad():
+                        # normal_loss = (depth_normal - normal).abs().sum(0).mean()
+                        # uncertainty_weight = (depth_normal[:, coverage_min_y:coverage_max_y, :] * normal[:, coverage_min_y:coverage_max_y, :]).abs().sum(0)
+                    # loss += weight * (uncertainty_weight * (depth_normal[:, coverage_min_y:coverage_max_y, :] - normal[:, coverage_min_y:coverage_max_y, :]).abs().sum(0)).mean()    
                         normal_loss = weight * (image_weight * (((depth_normal[:, coverage_min_y:coverage_max_y, :] - normal[:, coverage_min_y:coverage_max_y, :])).abs().sum(0))).mean()
+
+                        # normal_loss = weight * (((depth_normal[:, coverage_min_y:coverage_max_y, :] - normal[:, coverage_min_y:coverage_max_y, :])).abs().sum(0)).mean()
+                    if torch.isnan(normal_loss) :
+                        print(f'normal_loss loss is NaN, {camera.image_name}')
+                        # continue
                     else:
-                        normal_loss = weight * (((depth_normal[:, coverage_min_y:coverage_max_y, :] - normal[:, coverage_min_y:coverage_max_y, :])).abs().sum(0)).mean()
-                    loss += (normal_loss)
+                        loss += (normal_loss)
+                    # loss += (normal_loss)
+                except:
+                    print(f'image_weight {image_weight.shape}, normal {normal.shape}, depth_normal {depth_normal.shape}, coverage_min_y {coverage_min_y},  coverage_max_y {coverage_max_y}')
+                    # if scaling.shape[0] > 0:
+                    #     scaling_reg = scaling.prod(dim=1).mean()
+                    # else:
+                    #     scaling_reg = torch.tensor(0.0, device="cuda")
+                    # loss += 0.01 * scaling_reg # 0.01
             
-                # depth = render_pkg["plane_depth"]
+                
+            if iterations > opt.dpt_loss_from_iter:
                 # if depth is not None:
-                #     depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=100000)
-                #     if depth_l1_weight(iterations) > 0 and camera.depth_reliable:
-                #         invDepth = 1/depth
-                #         mono_invdepth = camera.invdepthmap.cuda()
-                #         # depth_mask = viewpoint_cam.depth_mask.cuda()
+                depth = render_pkg["plane_depth"]
+                depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=100000)
+                if depth_l1_weight(iterations) > 0 and camera.depth_reliable:
+                    invDepth = 1/ depth
+                    mono_invdepth = camera.invdepthmap.cuda()
+                    mask = camera.depth_mask.cuda()
+                    # mask = mono_invdepth != 0
+                    zero_mask_tensor = torch.zeros_like(invDepth, dtype=torch.bool)
+                    zero_mask_tensor[:, coverage_min_y:coverage_max_y, :] = 1
+                    mask_tensor = zero_mask_tensor
+                    mask_tensor = zero_mask_tensor & mask.unsqueeze(0)
+                    Ll1depth_pure = torch.abs((invDepth[mask_tensor]  - mono_invdepth[mask_tensor]) ).mean()
+                    Ll1depth = depth_l1_weight(iterations) * Ll1depth_pure 
+                    # loss += Ll1depth
+                    if torch.isnan(Ll1depth) :
+                        print(f'Ll1depth oss is NaN, {camera.image_name}')
+                        # continue
+                    else:
+                        loss += Ll1depth
+                        # print('depth_loss:', Ll1depth)
+            #     normal = render_pkg["rendered_normal"]
+            #     depth_normal = render_pkg["depth_normal"]
+            #     render_normal = (normal.permute(1,2,0) @ (camera.world_view_transform[:3,:3].T)).permute(2,0,1)
+            #     rendered_depth_normal = (depth_normal.permute(1,2,0) @ (camera.world_view_transform[:3,:3].T)).permute(2,0,1)
+            #     normal_gt = camera.noraml_gt.cuda()
+            #     normal_mask = camera.normal_mask.cuda()
+            # # if lambda_normal_prior > 0 and viewpoint_cam.normal_prior is not None:
+            #     prior_normal = normal_gt[:, coverage_min_y:coverage_max_y, :] * (render_pkg["rendered_alpha"][:, coverage_min_y:coverage_max_y, :]).detach()  #不透明的点影响越大 透明度大的点 较小
+            #     prior_normal_mask = normal_mask[0][coverage_min_y:coverage_max_y, :]
 
-                #         Ll1depth_pure = torch.abs((invDepth[:, coverage_min_y:coverage_max_y, :]  - mono_invdepth[:, coverage_min_y:coverage_max_y, :]) ).mean()
-                #         Ll1depth = depth_l1_weight(iterations) * Ll1depth_pure 
-                #         loss += Ll1depth
+            #     normal_prior_error = (1 - F.cosine_similarity(prior_normal[:, coverage_min_y:coverage_max_y, :], render_normal[:, coverage_min_y:coverage_max_y, :], dim=0)) + \
+            #                         (1 - F.cosine_similarity(prior_normal[:, coverage_min_y:coverage_max_y, :], rendered_depth_normal[:, coverage_min_y:coverage_max_y, :], dim=0))
+            #     normal_prior_error = normal_prior_error  
+            #     normal_prior_error = ranking_loss(normal_prior_error[prior_normal_mask], 
+            #                                     penalize_ratio=0.8, type='mean')
+                
+            #     normal_prior_loss = 0.08 * normal_prior_error
+            #     # except:
+            #     #     print(normal_gt.shape, render_pkg["rendered_alpha"].shape, normal_mask.shape, normal_prior_error.shape)
+            #     loss += (normal_prior_loss)   
+
+            if nearest_render_pkg is not None and nearest_cam.image_name != camera.image_name:
+                # if iterations <opt.multi_view_weight_from_iter * 2:
+                #     ncc_weight = (iterations-opt.multi_view_weight_from_iter) / (opt.multi_view_weight_from_iter*2-opt.multi_view_weight_from_iter) * 0.2
+                #     geo_weight = (iterations-opt.multi_view_weight_from_iter) / (opt.multi_view_weight_from_iter*2-opt.multi_view_weight_from_iter) * 0.05
+                # else:
+                #     ncc_weight = 0.2
+                #     geo_weight = 0.05
+                pixel_noise_th = opt.multi_view_pixel_noise_th
+                # # total_patch_size = (patch_size * 2 + 1) ** 2
+                ncc_weight = opt.multi_view_ncc_weight
+                geo_weight = opt.multi_view_geo_weight
+                ## compute geometry consistency mask and loss
+                H, W = render_pkg['plane_depth'].squeeze().shape
+                ix, iy = torch.meshgrid(
+                    torch.arange(W), torch.arange(H), indexing='xy')
+                pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['plane_depth'].device)
 
 
+                pts = get_points_from_depth(camera, render_pkg['plane_depth'])
+                pts_in_nearest_cam = pts @ nearest_cam.world_view_transform[:3,:3] + nearest_cam.world_view_transform[3,:3]
+                map_z, d_mask = get_points_depth_in_depth_map(nearest_cam, nearest_render_pkg['plane_depth'], pts_in_nearest_cam)
+                
+                pts_in_nearest_cam = pts_in_nearest_cam / (pts_in_nearest_cam[:,2:3])
+                pts_in_nearest_cam = pts_in_nearest_cam * map_z.squeeze()[...,None]
+                R = torch.tensor(nearest_cam.R).float().cuda()
+                T = torch.tensor(nearest_cam.T).float().cuda()
+                pts_ = (pts_in_nearest_cam-T)@R.transpose(-1,-2)
+                pts_in_view_cam = pts_ @ camera.world_view_transform[:3,:3] + camera.world_view_transform[3,:3]
+                pts_projections = torch.stack(
+                            [pts_in_view_cam[:,0] * camera.Fx / pts_in_view_cam[:,2] + camera.Cx,
+                            pts_in_view_cam[:,1] * camera.Fy / pts_in_view_cam[:,2] + camera.Cy], -1).float()
+                pixel_noise = torch.norm(pts_projections - pixels.reshape(*pts_projections.shape), dim=-1)
+                mask = torch.zeros_like(render_pkg['plane_depth'][0], dtype=torch.bool)
+                mask[coverage_min_y:coverage_max_y, :] = 1
+                mask = mask.reshape(-1)
 
-            rank = strategy.gpu_ids.index(utils.GLOBAL_RANK)
+                if not opt.wo_use_geo_occ_aware:
+                    d_mask = d_mask & (pixel_noise < pixel_noise_th)
+                    weights = (1.0 / torch.exp(pixel_noise)).detach()
+                    weights[~d_mask] = 0
+                    weights[~mask] = 0
+                else:
+                    d_mask = d_mask
+                    weights = torch.ones_like(pixel_noise)
+                    weights[~d_mask] = 0
+                d_mask = mask & d_mask
+                if d_mask.sum() > 0:
+                    geo_loss = geo_weight * ((weights * pixel_noise)[d_mask]).mean()
+                    # if torch.isnan(geo_loss) or not torch.isfinite(geo_loss):
+                    #     print(f'[fuck geo_loss] {geo_loss.shape , camera.image_name}')
+                    #     geo_loss = 0
+                    # loss += geo_loss
+                    # if use_virtul_cam is False:
+                    with torch.no_grad():
+                        ## sample mask
+                        if iterations < opt.multi_view_weight_from_iter * 1.2:
+                            patch_size, sample_num, scale, pixel_noise_th = 3, 10240, 4, 1.0
+                        elif iterations < opt.multi_view_weight_from_iter * 1.5:
+                            patch_size, sample_num, scale, pixel_noise_th = 3, 10240, 4, 1.0
+                        elif iterations < opt.multi_view_weight_from_iter * 2:
+                            patch_size, sample_num, scale, pixel_noise_th = 3, 102400, 2, 1.0
+                        else:
+                            patch_size, sample_num, scale, pixel_noise_th = 3, 102400, 1, 1.0
+                        sample_num = (coverage_max_y - coverage_min_y)*sample_num//H
+                        # patch_size = 3
+                        # sample_num = 102400
+                        d_mask = d_mask.reshape(-1)
+                        valid_indices = torch.arange(d_mask.shape[0], device=d_mask.device)[d_mask]
+                        if d_mask.sum() > sample_num:
+                            index = np.random.choice(d_mask.sum().cpu().numpy(), round(sample_num), replace = False)
+                            valid_indices = valid_indices[index]
+
+                        weights = weights.reshape(-1)[valid_indices]
+                        ## sample ref frame patch
+                        pixels = pixels.reshape(-1,2)[valid_indices]
+                        offsets = patch_offsets(patch_size, pixels.device)
+                        ori_pixels_patch = pixels.reshape(-1, 1, 2) / 1 + offsets.float()
+                        total_patch_size = (patch_size * 2 + 1) ** 2
+                        gt_image_gray = camera.image_gray.cuda()
+                        H, W = gt_image_gray.squeeze().shape
+                        pixels_patch = ori_pixels_patch.clone()
+                        pixels_patch[:, :, 0] = 2 * pixels_patch[:, :, 0] / (W - 1) - 1.0
+                        pixels_patch[:, :, 1] = 2 * pixels_patch[:, :, 1] / (H - 1) - 1.0
+                        ref_gray_val = F.grid_sample(gt_image_gray.unsqueeze(1), pixels_patch.view(1, -1, 1, 2), align_corners=True)
+                        ref_gray_val = ref_gray_val.reshape(-1, total_patch_size)
+
+                        ref_to_neareast_r = nearest_cam.world_view_transform[:3,:3].transpose(-1,-2) @ camera.world_view_transform[:3,:3]
+                        ref_to_neareast_t = -ref_to_neareast_r @ camera.world_view_transform[3,:3] + nearest_cam.world_view_transform[3,:3]
+
+                    # ## compute Homography
+                    ref_local_n = render_pkg["rendered_normal"].permute(1,2,0)
+                    ref_local_n = ref_local_n.reshape(-1,3)[valid_indices]
+
+                    ref_local_d = render_pkg['rendered_distance'].squeeze()
+                    # rays_d = viewpoint_cam.get_rays()
+                    # rendered_normal2 = render_pkg["rendered_normal"].permute(1,2,0).reshape(-1,3)
+                    # ref_local_d = render_pkg['plane_depth'].view(-1) * ((rendered_normal2 * rays_d.reshape(-1,3)).sum(-1).abs())
+                    # ref_local_d = ref_local_d.reshape(*render_pkg['plane_depth'].shape)
+
+                    ref_local_d = ref_local_d.reshape(-1)[valid_indices]
+                    H_ref_to_neareast = ref_to_neareast_r[None] - \
+                        torch.matmul(ref_to_neareast_t[None,:,None].expand(ref_local_d.shape[0],3,1), 
+                                    ref_local_n[:,:,None].expand(ref_local_d.shape[0],3,1).permute(0, 2, 1))/ref_local_d[...,None,None]
+                    H_ref_to_neareast = torch.matmul(nearest_cam.get_k(nearest_cam.ncc_scale)[None].expand(ref_local_d.shape[0], 3, 3), H_ref_to_neareast)
+                    H_ref_to_neareast = H_ref_to_neareast @camera.get_inv_k(camera.ncc_scale)
+                    
+                    ## compute neareast frame patch
+                    grid = patch_warp(H_ref_to_neareast.reshape(-1,3,3), ori_pixels_patch)
+                    grid[:, :, 0] = 2 * grid[:, :, 0] / (W - 1) - 1.0
+                    grid[:, :, 1] = 2 * grid[:, :, 1] / (H - 1) - 1.0
+                    nearest_image_gray = nearest_cam.image_gray.cuda()
+                    sampled_gray_val = F.grid_sample(nearest_image_gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
+                    sampled_gray_val = sampled_gray_val.reshape(-1, total_patch_size)
+                    
+                    ## compute loss
+                    
+                    ncc, ncc_mask = lncc(ref_gray_val, sampled_gray_val)
+                    mask = ncc_mask.reshape(-1)
+                    ncc = ncc.reshape(-1) * weights
+                    ncc = ncc[mask].squeeze()
+
+                    if mask.sum() > 0:
+                        ncc_loss = ncc_weight * ncc.mean()
+                        if torch.isnan(ncc_loss) or not torch.isfinite(ncc_loss):
+                                ncc_loss = 0
+                                print(f'[fuck ncc_loss] {camera.image_name}')
+                        loss += ncc_loss
+                #     
+                # try:
+            timers.stop("loss_computation")
+
 
         loss_sum += loss
 
 
     assert loss_sum.dim() == 0, "The loss_sum must be a scalar tensor."
-    timers.stop("loss_computation")
     return loss_sum * args.lr_scale_loss, batched_losses

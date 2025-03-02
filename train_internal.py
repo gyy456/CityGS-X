@@ -34,10 +34,25 @@ from os import makedirs
 from utils.camera_utils import set_rays_od
 import cv2
 import numpy as np
+from utils.loss_utils import ssim
+from lpipsPyTorch import lpips
 def sync_model_with_rank0(model):
     with torch.no_grad():
         for param in model.parameters():
             dist.broadcast(param.data, 0)
+def visualize_scalars(scalar_tensor: torch.Tensor) -> np.ndarray:
+    to_use = scalar_tensor.view(-1)
+    while to_use.shape[0] > 2 ** 24:
+        to_use = to_use[::2]
+
+    mi = torch.quantile(to_use, 0.05)
+    ma = torch.quantile(to_use, 0.95)
+
+    scalar_tensor = (scalar_tensor - mi) / max(ma - mi, 1e-8)  # normalize to 0~1
+    scalar_tensor = scalar_tensor.clamp_(0, 1)
+
+    scalar_tensor = ((1 - scalar_tensor) * 255).byte().numpy()  # inverse heatmap
+    return cv2.cvtColor(cv2.applyColorMap(scalar_tensor, cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
 
 def training(dataset_args, opt_args, pipe_args, args, log_file):
 
@@ -150,7 +165,7 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
                 batched_all_cameras_idx
             )
         else:
-            batched_cameras = train_dataset.get_batched_cameras(args.bsz)
+            batched_cameras, batched_nearest_cameras = train_dataset.get_batched_cameras(args.bsz)
 
         with torch.no_grad():
             # Prepare Workload division strategy
@@ -158,6 +173,9 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
             batched_strategies, gpuid2tasks = start_strategy_final(
                 batched_cameras, strategy_history
             )
+            # batched_strategies_nearest, gpuid2tasks_nearest = start_strategy_final(
+            #     batched_nearest_cameras, strategy_history
+            # )                                     # make sure don't divide the same camera twice  # gyy
             timers.stop("prepare_strategies")
 
             # Load ground-truth images to GPU
@@ -165,6 +183,9 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
             load_camera_from_cpu_to_all_gpu(
                 batched_cameras, batched_strategies, gpuid2tasks
             )
+            # load_camera_from_cpu_to_all_gpu(
+            #     batched_nearest_cameras, batched_strategies, gpuid2tasks  # make sure don't divide the same camera twice  # gyy
+            # )
             timers.stop("load_cameras")
         # pdb.set_trace()
         if args.backend == "gsplat":
@@ -189,34 +210,47 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
             batched_voxel_mask = [] 
             # camera_t = []
             # cams=[]
+            batched_nearest_voxel_mask = []
             for camera in batched_cameras:
                 gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
                 voxel_visible_mask = prefilter_voxel(camera, gaussians, pipe_args, background)
                 batched_voxel_mask.append(voxel_visible_mask)
                 # camera_t.append(camera.camera_center/torch.norm(camera.camera_center))
                 # cams.append(camera)
+            if iteration >  opt_args.multi_view_weight_from_iter:
+                for camera in batched_nearest_cameras:
+                    if camera != None:
+                        gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
+                        voxel_visible_mask = prefilter_voxel(camera, gaussians, pipe_args, background)
+                        batched_nearest_voxel_mask.append(voxel_visible_mask)
+                    else:
+                        batched_nearest_voxel_mask.append(None)
+            else:
+                for camera in batched_nearest_cameras:
+                    batched_nearest_voxel_mask.append(None)
             retain_grad = (iteration < opt_args.update_until and iteration >= 0)
-
-
 
             batched_screenspace_pkg = distributed_preprocess3dgs_and_all2all_final(
                 batched_cameras,
                 gaussians,
                 pipe_args,
                 background,
-                batched_voxel_mask=batched_voxel_mask,
+                batched_voxel_mask = batched_voxel_mask,
+                batched_nearest_cameras = batched_nearest_cameras,
+                batched_nearest_voxel_mask = batched_nearest_voxel_mask,
                 retain_grad=retain_grad,
                 batched_strategies=batched_strategies,
                 mode="train",
+                return_plane = iteration > opt_args.single_view_weight_from_iter,
+                iterations = iteration ,
             )
-            batched_image, batched_compute_locally,  batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict = render_final(batched_cameras,
-                batched_screenspace_pkg, batched_strategies, gaussians
+            batched_image, batched_compute_locally,  batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict, batched_return_dict_nearest = render_final(batched_cameras,
+                batched_screenspace_pkg, batched_strategies, gaussians, batched_cameras_nearest = batched_nearest_cameras
             )
             batch_statistic_collector = [
                 cuda_args["stats_collector"]
                 for cuda_args in batched_screenspace_pkg["batched_cuda_args"]
             ]
-
         loss_sum, batched_losses = batched_loss_computation(
             batched_image,
             batched_return_dict,
@@ -226,6 +260,8 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
             batch_statistic_collector,
             iterations=iteration,
             opt=opt_args,
+            batched_return_dict_nearest = batched_return_dict_nearest,
+            batched_nearest_cameras = batched_nearest_cameras
         )
 
 
@@ -242,19 +278,19 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
                     torch.distributed.all_reduce(param.grad)
                     torch.cuda.synchronize()
                     dist.barrier()
-                    param.grad = param.grad / utils.DEFAULT_GROUP.size()
+                    param.grad = param.grad / len(batched_cameras)
 
                 for param in gaussians.mlp_color.parameters():
                     torch.distributed.all_reduce(param.grad)
                     torch.cuda.synchronize()
                     dist.barrier()
-                    param.grad = param.grad / utils.DEFAULT_GROUP.size()
+                    param.grad = param.grad / len(batched_cameras)
 
                 for param in gaussians.mlp_cov.parameters():
                     torch.distributed.all_reduce(param.grad)
                     torch.cuda.synchronize()
                     dist.barrier()
-                    param.grad = param.grad / utils.DEFAULT_GROUP.size()
+                    param.grad = param.grad / len(batched_cameras)
 
         with torch.no_grad():
             # Adjust workload division strategy.
@@ -443,16 +479,19 @@ def training_report(
             gts_path = os.path.join(model_path, config["name"], "ours_{}".format(iteration), "gt")
             depths_path = os.path.join(model_path, config["name"], "ours_{}".format(iteration), "depths")
             render_normal_path = os.path.join(model_path, config["name"], "ours_{}".format(iteration), "normals")
+            rendered_distance_path = os.path.join(model_path, config["name"], "ours_{}".format(iteration), "distance")
             makedirs(render_path, exist_ok=True)
             makedirs(gts_path, exist_ok=True)
             makedirs(depths_path, exist_ok=True)
             makedirs(render_normal_path, exist_ok=True)
+            makedirs(rendered_distance_path, exist_ok=True)
             if config["cameras"] and len(config["cameras"]) > 0:
                 l1_test = torch.scalar_tensor(0.0, device="cuda")
                 psnr_test = torch.scalar_tensor(0.0, device="cuda")
-
+                ssim_test = torch.scalar_tensor(0.0, device="cuda")
+                lpips_test = torch.scalar_tensor(0.0, device="cuda")
                 # TODO: if not divisible by world size
-                num_cameras = config["num_cameras"] // args.bsz * args.bsz
+                num_cameras = config["num_cameras"] 
                 eval_dataset = SceneDataset(config["cameras"])
                 strategy_history = DivisionStrategyHistoryFinal(
                     eval_dataset, utils.DEFAULT_GROUP.size(), utils.DEFAULT_GROUP.rank()
@@ -480,11 +519,11 @@ def training_report(
                         batched_all_cameras_idx = (
                             batched_all_cameras_idx.cpu().numpy().squeeze()
                         )
-                        batched_cameras = eval_dataset.get_batched_cameras_from_idx(
+                        batched_cameras, _ = eval_dataset.get_batched_cameras_from_idx(
                             batched_all_cameras_idx
                         )
                     else:
-                        batched_cameras = eval_dataset.get_batched_cameras(
+                        batched_cameras, _ = eval_dataset.get_batched_cameras(
                             num_camera_to_load , eval = True
                         )
                     batched_strategies, gpuid2tasks = start_strategy_final(
@@ -509,10 +548,14 @@ def training_report(
                         )
                     else:
                         batched_voxel_mask = [] 
+                        batched_nearest_voxel_mask= []
+                        batched_nearest_cameras= []
                         for camera in batched_cameras:
                             scene.gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
                             voxel_visible_mask = prefilter_voxel(camera, scene.gaussians, pipe_args, background)
                             batched_voxel_mask.append(voxel_visible_mask)
+                            batched_nearest_voxel_mask.append(None)
+                            batched_nearest_cameras.append(None)
                         # retain_grad = (iteration < opt_args.update_until and iteration >= 0)
                         batched_screenspace_pkg = (
                             distributed_preprocess3dgs_and_all2all_final(
@@ -522,10 +565,12 @@ def training_report(
                                 batched_voxel_mask = batched_voxel_mask,
                                 bg_color = background,
                                 batched_strategies=batched_strategies,
+                                batched_nearest_cameras = batched_nearest_cameras,
+                                batched_nearest_voxel_mask = batched_nearest_voxel_mask,
                                 mode="test",
                             )
                         )
-                        batched_image, batched_compute_locally, batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict = render_final(
+                        batched_image, batched_compute_locally, batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict, _ = render_final(
                             batched_cameras, batched_screenspace_pkg, batched_strategies
                         )
                     for camera_id, (image, gt_camera, render_pkg) in enumerate(
@@ -533,6 +578,7 @@ def training_report(
                     ):
                         depth = render_pkg["plane_depth"]
                         normal = render_pkg["rendered_normal"]
+                        rendered_distance = render_pkg["rendered_distance"]
                         if (
                             image is None or len(image.shape) == 0
                         ):  # The image is not rendered locally.
@@ -549,6 +595,12 @@ def training_report(
                                 device="cuda",
                                 dtype=torch.float32,
                             )
+                            rendered_distance = torch.zeros(
+                                (1, gt_camera.original_image.shape[1], gt_camera.original_image.shape[2]),
+                                device="cuda",
+                                dtype=torch.float32,
+                            )
+
                         if (
                             normal is None or len(normal.shape) == 0
                         ):
@@ -561,6 +613,10 @@ def training_report(
                         if utils.DEFAULT_GROUP.size() > 1:
                             torch.distributed.all_reduce(
                                 depth, op=dist.ReduceOp.SUM, group=utils.DEFAULT_GROUP
+                            )
+
+                            torch.distributed.all_reduce(
+                                rendered_distance, op=dist.ReduceOp.SUM, group=utils.DEFAULT_GROUP
                             )
 
                         # if utils.DEFAULT_GROUP.size() > 1:
@@ -580,26 +636,34 @@ def training_report(
                         if idx + camera_id < num_cameras + 1:
                             l1_test += l1_loss(image, gt_image).mean().double()
                             psnr_test += psnr(image, gt_image).mean().double()
+                            # ssim_test += ssim(image, gt_image).mean().double()
+                            # lpips_test += lpips(image, gt_image, net_type="vgg").mean().double()
+
+
                         if utils.GLOBAL_RANK == 0:
-                            torchvision.utils.save_image(
-                                image,
-                                os.path.join(render_path, gt_camera.image_name + ".png"),
-                            )
-                            torchvision.utils.save_image(
-                                gt_image,
-                                os.path.join(gts_path, gt_camera.image_name + ".png"),
-                            )
+
 
                             depth = depth.detach().cpu().numpy().squeeze(0)
                             depth_i = (depth - depth.min()) / (depth.max() - depth.min() + 1e-20)
                             depth_i = (depth_i * 255).clip(0, 255).astype(np.uint8)
                             depth_color = cv2.applyColorMap(depth_i, cv2.COLORMAP_JET)
                             
+
+                            distance = rendered_distance.squeeze().detach().cpu().numpy()
+                            distance_i = (distance - distance.min()) / (distance.max() - distance.min() + 1e-20)
+                            distance_i = (distance_i * 255).clip(0, 255).astype(np.uint8)
+                            distance_color = cv2.applyColorMap(distance_i, cv2.COLORMAP_JET)
+
+
+                            # depth_RED = visualize_scalars(torch.log(depth + 1e-8).detach().cpu())
+
+                            # plt.imsave(os.path.join(depths_path, 'depth-' +(gt_camera.image_name + '.png') ), depth_RED)
+
                             # torchvision.utils.save_image(
                             #     torch.tensor(depth_color).permute(2,0,1)/255.0,
                             #     os.path.join(depths_path, gt_camera.image_name + ".png"),
                             # )
-                            cv2.imwrite(os.path.join(depths_path,  gt_camera.image_name + ".png"), depth_color)
+
 
                             normal = normal.permute(1,2,0)
                             normal = normal/(normal.norm(dim=-1, keepdim=True)+1.0e-8)
@@ -609,20 +673,60 @@ def training_report(
                             #     torch.tensor(normal).permute(2,0,1)/255.0,
                             #     os.path.join(render_normal_path, gt_camera.image_name + ".png"),
                             # )
-                            cv2.imwrite(os.path.join(render_normal_path,  gt_camera.image_name + ".png"), normal)
+                            if "MatrixCity" in args.source_path:
+                                filename = gt_camera.image_name.split("/")[-1]  # 获取 "0068.png"
+                                torchvision.utils.save_image(
+                                image,
+                                os.path.join(render_path, filename ),
+                                )
+                                torchvision.utils.save_image(
+                                    gt_image,
+                                    os.path.join(gts_path, filename ),
+                                )
+                                # cv2.imwrite(os.path.join(rendered_distance_path,  filename ), distance_color)
+                                cv2.imwrite(os.path.join(depths_path,  filename ), depth_color)
+                                # cv2.imwrite(os.path.join(render_normal_path,  filename), normal)
+                            else:
+                                torchvision.utils.save_image(
+                                    image,
+                                    os.path.join(render_path, gt_camera.image_name + ".png"),
+                                )
+                                torchvision.utils.save_image(
+                                    gt_image,
+                                    os.path.join(gts_path, gt_camera.image_name + ".png"),
+                                )
+                                cv2.imwrite(os.path.join(rendered_distance_path,  gt_camera.image_name + ".png"), distance_color)
+                                cv2.imwrite(os.path.join(depths_path,  gt_camera.image_name + ".png"), depth_color)
+                                cv2.imwrite(os.path.join(render_normal_path,  gt_camera.image_name + ".png"), normal)
 
                         gt_camera.original_image = None
                 psnr_test /= num_cameras
+                lpips_test/= num_cameras
+                ssim_test /= num_cameras
                 l1_test /= num_cameras
                 utils.print_rank_0(
-                    "\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(
-                        iteration, config["name"], l1_test, psnr_test
-                    )
+                    "\n[ITER {}] Evaluating {}: L1 {} PSNR {}, images {}, ".format(
+                        iteration, config["name"], l1_test, psnr_test, num_cameras
+                    ),
+                    #  "\n[ITER {}] Evaluating {}: L1 {} SSIM {}".format(
+                    #     iteration, config["name"], l1_test, ssim_test
+                    # ),
+                    #  "\n[ITER {}] Evaluating {}: L1 {} SSIM {}".format(
+                    #     iteration, config["name"], l1_test, lpips_test
+                    # )
+
                 )
                 log_file.write(
                     "[ITER {}] Evaluating {}: L1 {} PSNR {}\n".format(
                         iteration, config["name"], l1_test, psnr_test
-                    )
+                    ),
+                    # "\n[ITER {}] Evaluating {}: L1 {} SSIM {}".format(
+                    #     iteration, config["name"], l1_test, ssim_test
+                    # ),
+                    #  "\n[ITER {}] Evaluating {}: L1 {} SSIM {}".format(
+                    #     iteration, config["name"], l1_test, lpips_test
+                    # )
+
                 )
 
         torch.cuda.empty_cache()

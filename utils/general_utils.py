@@ -354,7 +354,7 @@ def check_memory_usage(log_file, args, iteration, gaussians, before_densificatio
         iteration,
         iteration + args.bsz,
         "densify_and_prune. " if not before_densification_stop else "",
-        gaussians.get_xyz.shape[0],
+        gaussians.get_anchor.shape[0],
         memory_usage,
         max_memory_usage,
         max_reserved_memory,
@@ -368,7 +368,7 @@ def check_memory_usage(log_file, args, iteration, gaussians, before_densificatio
 
     if before_densification_stop:
         memory_usage_list = our_allgather_among_cpu_processes_float_list(
-            [max_reserved_memory], DEFAULT_GROUP
+            [memory_usage], DEFAULT_GROUP   #bug fix gyy
         )
         # print("total memory: ", torch.cuda.get_device_properties(0).total_memory)
         total_memory = (
@@ -378,13 +378,23 @@ def check_memory_usage(log_file, args, iteration, gaussians, before_densificatio
             max([a[0] for a in memory_usage_list])
             > args.densify_memory_limit_percentage * total_memory
         ):  # If memory usage is reaching the upper bound of GPU memory, stop densification to avoid OOM by fragmentation and etc.
-            print(
-                "Reserved Memory usage is reaching the upper bound of GPU memory. stop densification.\n"
-            )
+            # print(
+            #     "Reserved Memory usage is reaching the upper bound of GPU memory. stop densification.\n"
+            # )
             log_file.write(
-                "Reserved Memory usage is reaching the upper bound of GPU memory. stop densification.\n"
+                "stop densification.\n"
             )
             args.disable_auto_densification = True
+    # elif( max([a[0] for a in memory_usage_list]) < args.densify_memory_start_percentage * total_memory ):
+    #     # print(
+    #     #     "Reserved Memory usage is lower than the bound of GPU memory. start densification.\n"
+    #     # )
+    #     log_file.write(
+    #         "start densification.\n"
+    #     )
+    #     args.disable_auto_densification = False
+    # else:
+    #     print("error")
 
 
 def PILtoTorch(pil_image, resolution, args, log_file, decompressed_image=None):
@@ -401,6 +411,23 @@ def PILtoTorch(pil_image, resolution, args, log_file, decompressed_image=None):
         return resized_image.permute(2, 0, 1)
     else:
         return resized_image.unsqueeze(dim=-1).permute(2, 0, 1)
+
+
+
+
+def PILtoTorch_1(pil_image, resolution=None):
+    if resolution is None:
+        resized_image_PIL = pil_image
+    else:
+        resized_image_PIL = pil_image.resize(resolution)
+    resized_image = torch.from_numpy(np.array(resized_image_PIL)) / 255.0
+    if len(resized_image.shape) == 3:
+        return resized_image.permute(2, 0, 1)
+    else:
+        return resized_image.unsqueeze(dim=-1).permute(2, 0, 1)
+
+
+
 
 
 def get_expon_lr_func(

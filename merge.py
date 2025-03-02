@@ -1,239 +1,228 @@
-#
-# Copyright (C) 2023, Inria
-# GRAPHDECO research group, https://team.inria.fr/graphdeco
-# All rights reserved.
-#
-# This software is free for non-commercial, research and evaluation use
-# under the terms of the LICENSE.md file.
-#
-# For inquiries contact  george.drettakis@inria.fr
-#
-
+import os.path,sys
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
+sys.path.append(parent_dir)
+import json
+import numpy as np
 import torch
-import torch.distributed as dist
-from scene import Scene, SceneDataset
-import os
-from tqdm import tqdm
-from os import makedirs
-from gaussian_renderer import (
-    # preprocess3dgs_and_all2all,
-    # render
-    distributed_preprocess3dgs_and_all2all_final,
-    render_final,
-)
-import torchvision
-from utils.general_utils import (
-    safe_state,
-    set_args,
-    init_distributed,
-    set_log_file,
-    set_cur_iter,
-)
-from argparse import ArgumentParser
-import debugpy
-from arguments import ModelParams, PipelineParams, get_combined_args
-from gaussian_renderer import GaussianModel, prefilter_voxel
-from gaussian_renderer.loss_distribution import load_camera_from_cpu_to_all_gpu_for_eval
-from gaussian_renderer.workload_division import (
-    start_strategy_final,
-    DivisionStrategyHistoryFinal,
-)
-from arguments import (
-    AuxiliaryParams,
-    ModelParams,
-    PipelineParams,
-    OptimizationParams,
-    DistributionParams,
-    BenchmarkParams,
-    DebugParams,
-    print_all_args,
-    init_args,
-)
-import utils.general_utils as utils
+from plyfile import PlyData, PlyElement
+from scene.gaussian_model import GaussianModel
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import argparse
+def load_ply(path):
+    plydata = PlyData.read(path)
+    max_sh_degree = 3
+    xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
+                    np.asarray(plydata.elements[0]["y"]),
+                    np.asarray(plydata.elements[0]["z"])), axis=1)
+    opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+
+    features_dc = np.zeros((xyz.shape[0], 3, 1))
+    features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
+    features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
+    features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])
+
+    extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
+    extra_f_names = sorted(extra_f_names, key=lambda x: int(x.split('_')[-1]))
+    assert len(extra_f_names) == 3 * (max_sh_degree + 1) ** 2 - 3
+    features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
+    for idx, attr_name in enumerate(extra_f_names):
+        features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
+    # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
+    features_extra = features_extra.reshape((features_extra.shape[0], 3, (max_sh_degree + 1) ** 2 - 1))
+
+    scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
+    scale_names = sorted(scale_names, key=lambda x: int(x.split('_')[-1]))
+    scales = np.zeros((xyz.shape[0], len(scale_names)))
+    for idx, attr_name in enumerate(scale_names):
+        scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
+    rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
+    rot_names = sorted(rot_names, key=lambda x: int(x.split('_')[-1]))
+    rots = np.zeros((xyz.shape[0], len(rot_names)))
+    for idx, attr_name in enumerate(rot_names):
+        rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
+    return xyz, features_dc, features_extra, opacities, scales, rots
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background):
-    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
-    gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+def construct_list_of_attributes(self):
+    l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+    # All channels except the 3 DC
+    for i in range(self._features_dc.shape[1] * self._features_dc.shape[2]):
+        l.append('f_dc_{}'.format(i))
+    for i in range(self._features_rest.shape[1] * self._features_rest.shape[2]):
+        l.append('f_rest_{}'.format(i))
+    l.append('opacity')
+    for i in range(self._scaling.shape[1]):
+        l.append('scale_{}'.format(i))
+    for i in range(self._rotation.shape[1]):
+        l.append('rot_{}'.format(i))
+    return l
 
-    makedirs(render_path, exist_ok=True)
-    makedirs(gts_path, exist_ok=True)
 
-    dataset = SceneDataset(views)
+def save_ply(path, anchor, offset, anchor_feat,  scaling, rotation, level, extra_level, opacity, voxel_size, standard_dist):
+    l = []
+    l.append('x')
+    l.append('y')
+    l.append('z')
+    l.append('level')
+    l.append('extra_level')
+    l.append('info')
+    for i in range(offset.shape[1]*offset.shape[2]):
+        l.append('f_offset_{}'.format(i))
+    for i in range(anchor_feat.shape[1]):
+        l.append('f_anchor_feat_{}'.format(i))
+    l.append('opacity')
+    for i in range(scaling.shape[1]):
+        l.append('scale_{}'.format(i))
+    for i in range(rotation.shape[1]):
+        l.append('rot_{}'.format(i))
+    dtype_full = [(attribute, 'f4') for attribute in l]
 
-    set_cur_iter(iteration)
-    generated_cnt = 0
+    anchor = anchor.detach().cpu().numpy()
+    levels = level.detach().cpu().numpy()
+    extra_levels = extra_level.unsqueeze(dim=1).detach().cpu().numpy()
+    infos = np.zeros_like(levels, dtype=np.float32)
+    infos[0, 0] = voxel_size
+    infos[1, 0] = standard_dist
 
-    num_cameras = len(views)
-    strategy_history = DivisionStrategyHistoryFinal(
-        dataset, utils.DEFAULT_GROUP.size(), utils.DEFAULT_GROUP.rank()
-    )
-    progress_bar = tqdm(
-        range(1, num_cameras + 1),
-        desc="Rendering progress",
-        disable=(utils.LOCAL_RANK != 0),
-    )
-    for idx in range(1, num_cameras + 1, args.bsz):
-        progress_bar.update(args.bsz)
+    anchor_feats = anchor_feat.detach().cpu().numpy()
+    offsets = offset.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+    opacities = opacity.detach().cpu().numpy()
+    scales = scaling.detach().cpu().numpy()
+    rots = rotation.detach().cpu().numpy()
 
-        num_camera_to_load = min(args.bsz, num_cameras - idx + 1)
-        batched_cameras = dataset.get_batched_cameras(num_camera_to_load)
-        batched_strategies, gpuid2tasks = start_strategy_final(
-            batched_cameras, strategy_history
+
+    elements = np.empty(anchor.shape[0], dtype=dtype_full)
+    attributes = np.concatenate((anchor, levels, extra_levels, infos, offsets, anchor_feats, opacities, scales, rots), axis=1)
+    elements[:] = list(map(tuple, attributes))
+    el = PlyElement.describe(elements, 'vertex')
+    PlyData([el]).write(path)
+
+
+def load_raw_ply(path):
+    print("Loading ", path)
+    plydata = PlyData.read(path)
+
+    anchor = np.stack((np.asarray(plydata.elements[0]["x"]),
+                    np.asarray(plydata.elements[0]["y"]),
+                    np.asarray(plydata.elements[0]["z"])),  axis=1).astype(np.float32)
+    
+    levels = np.asarray(plydata.elements[0]["level"])[... ,np.newaxis]
+    extra_levels = np.asarray(plydata.elements[0]["extra_level"])[... ,np.newaxis].astype(np.float32)
+    voxel_size = torch.tensor(plydata.elements[0]["info"][0]).float()
+    standard_dist = torch.tensor(plydata.elements[0]["info"][1]).float()
+
+    opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis].astype(np.float32)
+
+    scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
+    scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
+    scales = np.zeros((anchor.shape[0], len(scale_names)))
+    for idx, attr_name in enumerate(scale_names):
+        scales[:, idx] = np.asarray(plydata.elements[0][attr_name]).astype(np.float32)
+
+    rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
+    rot_names = sorted(rot_names, key = lambda x: int(x.split('_')[-1]))
+    rots = np.zeros((anchor.shape[0], len(rot_names)))
+    for idx, attr_name in enumerate(rot_names):
+        rots[:, idx] = np.asarray(plydata.elements[0][attr_name]).astype(np.float32)
+    
+    # anchor_feat
+    anchor_feat_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_anchor_feat")]
+    anchor_feat_names = sorted(anchor_feat_names, key = lambda x: int(x.split('_')[-1]))
+    anchor_feats = np.zeros((anchor.shape[0], len(anchor_feat_names)))
+    for idx, attr_name in enumerate(anchor_feat_names):
+        anchor_feats[:, idx] = np.asarray(plydata.elements[0][attr_name]).astype(np.float32)
+
+    offset_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_offset")]
+    offset_names = sorted(offset_names, key = lambda x: int(x.split('_')[-1]))
+    offsets = np.zeros((anchor.shape[0], len(offset_names)))
+    for idx, attr_name in enumerate(offset_names):
+        offsets[:, idx] = np.asarray(plydata.elements[0][attr_name]).astype(np.float32)
+    
+    offsets = offsets.reshape((offsets.shape[0], 3, -1))
+    anchor_feat = np.ascontiguousarray(anchor_feats)
+    level = np.ascontiguousarray(levels)
+    extra_level = np.ascontiguousarray(extra_levels)
+    offset = np.ascontiguousarray(offsets)
+    anchor = np.ascontiguousarray(anchor)
+    scaling = np.ascontiguousarray(scales)
+    opacity = np.ascontiguousarray(opacities)
+    rotation = np.ascontiguousarray(rots)
+    anchor_mask = np.ones(anchor.shape[0])
+    levels =  1
+
+    return anchor_feat, level, extra_level, offset, anchor, scaling, opacity, rotation, anchor_mask, levels, voxel_size ,standard_dist
+
+
+def seamless_merge(source_path, model_path):
+
+
+    catted_anchor_feat = []
+    catted_offset = []
+    catted_levels = []
+    catted_extra_level = []
+    catted_anchor = []
+    catted_opacity = []
+    catted_scaling = []
+    catted_rotation = []
+
+
+    for rk in range(4):
+        one_checkpoint_path = (
+            source_path + "/point_cloud_rk" + str(rk) + "_ws" + str(4) + ".ply"
         )
-        load_camera_from_cpu_to_all_gpu_for_eval(
-            batched_cameras, batched_strategies, gpuid2tasks
+        anchor_feat, level, extra_level, offset, anchor, scaling, opacity, rotation, anchor_mask, levels,  voxel_size ,standard_dist = (
+            load_raw_ply(one_checkpoint_path)
         )
-        batched_voxel_mask = [] 
-        for camera in batched_cameras:
-            gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
-            voxel_visible_mask = prefilter_voxel(camera, gaussians, pipeline, background)
-            batched_voxel_mask.append(voxel_visible_mask)
-
-        batched_screenspace_pkg = distributed_preprocess3dgs_and_all2all_final(
-            batched_cameras,
-            gaussians,
-            pipeline,
-            background,
-            batched_voxel_mask=batched_voxel_mask,
-            batched_strategies=batched_strategies,
-            mode="test",
-        )
-        batched_image, _ = render_final(batched_screenspace_pkg, batched_strategies)
-
-        for camera_id, (image, gt_camera) in enumerate(
-            zip(batched_image, batched_cameras)
-        ):
-            actual_idx = idx + camera_id
-            if args.sample_freq != -1 and actual_idx % args.sample_freq != 0:
-                continue
-            if generated_cnt == args.generate_num:
-                break
-            if os.path.exists(
-                os.path.join(render_path, "{0:05d}".format(actual_idx) + ".png")
-            ):
-                continue
-            if args.l != -1 and args.r != -1:
-                if actual_idx < args.l or actual_idx >= args.r:
-                    continue
-
-            generated_cnt += 1
-
-            if (
-                image is None or len(image.shape) == 0
-            ):  # The image is not rendered locally.
-                image = torch.zeros(
-                    gt_camera.original_image.shape, device="cuda", dtype=torch.float32
-                )
-
-            if utils.DEFAULT_GROUP.size() > 1:
-                torch.distributed.all_reduce(
-                    image, op=dist.ReduceOp.SUM, group=utils.DEFAULT_GROUP
-                )
-
-            image = torch.clamp(image, 0.0, 1.0)
-            gt_image = torch.clamp(gt_camera.original_image / 255.0, 0.0, 1.0)
-
-            if utils.GLOBAL_RANK == 0:
-                torchvision.utils.save_image(
-                    image,
-                    os.path.join(render_path, "{0:05d}".format(actual_idx) + ".png"),
-                )
-                torchvision.utils.save_image(
-                    gt_image,
-                    os.path.join(gts_path, "{0:05d}".format(actual_idx) + ".png"),
-                )
-
-            gt_camera.original_image = None
-
-        if generated_cnt == args.generate_num:
-            break
+        catted_anchor_feat.append(anchor_feat)
+        catted_offset.append(offset)
+        catted_levels.append(level)
+        catted_extra_level.append(extra_level)
+        catted_anchor.append(anchor)
+        catted_opacity.append(opacity)
+        catted_scaling.append(scaling)
+        catted_rotation.append(rotation)
+    catted_anchor_feat = np.concatenate(catted_anchor_feat, axis=0)
+    catted_offset = np.concatenate(catted_offset, axis=0)
+    catted_levels = np.concatenate(catted_levels, axis=0)
+    catted_opacity = np.concatenate(catted_opacity, axis=0)
+    catted_scaling = np.concatenate(catted_scaling, axis=0)
+    catted_rotation = np.concatenate(catted_rotation, axis=0)
+    catted_extra_level = np.concatenate(catted_extra_level, axis=0)
+    catted_anchor = np.concatenate(catted_anchor, axis=0)
+    anchor_feat = torch.tensor(catted_anchor_feat, dtype=torch.float, device="cuda")
+    level = torch.tensor(catted_levels, dtype=torch.int, device="cuda")
+    extra_level = torch.tensor(catted_extra_level, dtype=torch.float, device="cuda").squeeze(dim=1)
+    offset = torch.tensor(catted_offset, dtype=torch.float, device="cuda").transpose(1, 2).contiguous()
+    anchor = torch.tensor(catted_anchor, dtype=torch.float, device="cuda")
+    scaling = torch.tensor(catted_scaling, dtype=torch.float, device="cuda")
+    opacity = torch.tensor(catted_opacity, dtype=torch.float, device="cuda")
+    rotation = torch.tensor(catted_rotation, dtype=torch.float, device="cuda")
+    anchor_mask = torch.ones(anchor.shape[0], dtype=torch.bool, device="cuda")
+    levels = torch.max(level) - torch.min(level) + 1
+    levels = levels.int().item()
 
 
-def render_sets(
-    dataset: ModelParams,
-    iteration: int,
-    pipeline: PipelineParams,
-    skip_train: bool,
-    skip_test: bool,
-):
-    with torch.no_grad():
-        args = utils.get_args()
-        # gaussians = GaussianModel(dataset.sh_degree)
-        gaussians = GaussianModel(
-        dataset.feat_dim, dataset.n_offsets, dataset.fork, dataset.use_feat_bank, dataset.appearance_dim, 
-        dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist, dataset.add_level, 
-        dataset.visible_threshold, dataset.dist2level, dataset.base_layer, dataset.progressive, dataset.extend
-    )
-        scene = Scene(args, gaussians, load_iteration=iteration, shuffle=False)
-
-        scene.save(iteration)
 
 
-if __name__ == "__main__":
-    # Set up command line argument parser
-    parser = ArgumentParser(description="Training script parameters")
-    ap = AuxiliaryParams(parser)
-    lp = ModelParams(parser)
-    op = OptimizationParams(parser)
-    pp = PipelineParams(parser)
-    dist_p = DistributionParams(parser)
-    bench_p = BenchmarkParams(parser)
-    debug_p = DebugParams(parser)
-    parser.add_argument("--iteration", default=-1, type=int)
-    parser.add_argument("--skip_train", action="store_true")
-    parser.add_argument("--skip_test", action="store_true")
-    parser.add_argument("--generate_num", default=-1, type=int)
-    parser.add_argument("--sample_freq", default=-1, type=int)
-    parser.add_argument("--distributed_load", action="store_true")  # TODO: delete this.
-    parser.add_argument("--l", default=-1, type=int)
-    parser.add_argument("--r", default=-1, type=int)
-    args = get_combined_args(parser)
-    print("Rendering " + args.model_path)
-
-    # rank = int(os.environ.get("LOCAL_RANK", 0))
-    # # 在调用分布式初始化之前初始化调试器
-    # port = 5678 + rank  # 每个进程使用不同的端口
-    # # if rank==0:
-    # debugpy.listen(('0.0.0.0', port))  # 启动调试器并监听不同的端口
-    # print(f"Process {rank} waiting for debugger to attach on port {port}...")
-    # debugpy.wait_for_client()  # 程序在这里暂停，直到调试器连接
+    save_ply(model_path, anchor, offset, anchor_feat,  scaling, rotation, level, extra_level, opacity, voxel_size, standard_dist)
 
 
-    init_distributed(args)
-    # This script only supports single-gpu rendering.
-    # I need to put the flags here because the render() function need it.
-    # However, disable them during render.py because they are only needed during training.
 
 
-    log_file = open(
-        args.model_path
-        + f"/render_ws={utils.DEFAULT_GROUP.size()}_rk_{utils.DEFAULT_GROUP.rank()}.log",
-        "w",
-    )
-    set_log_file(log_file)
 
-    ## Prepare arguments.
-    # Check arguments
-    init_args(args)
-    if args.skip_train:
-        args.num_train_cameras = 0
-    if args.skip_test:
-        args.num_test_cameras = 0
-    # Set up global args
-    set_args(args)
 
-    print_all_args(args, log_file)
+if __name__ == '__main__':
 
-    if utils.WORLD_SIZE > 1:
-        torch.distributed.barrier(group=utils.DEFAULT_GROUP)
-    # Initialize system state (RNG)
-    safe_state(args.quiet)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--local_model_path', '-m', required=True, help='Path to the pretrained model')
+    parser.add_argument('--save_merge_dir', '-s', default=None, help='Path to save the PLY file')
+    args = parser.parse_args()
 
-    render_sets(
-        lp.extract(args),
-        args.iteration,
-        pp.extract(args),
-        args.skip_train,
-        args.skip_test,
-    )
+    # local_model_path = 'results/device_PGSR/device_0'
+    # block_config = 'datasets/rubble/fed_init/2_2/edge_0/edge_0/block.json'
+    # save_merge_dir = f'results/device_PGSR/cloud_model_merge_device0.ply'
+    seamless_merge(args.local_model_path,args.save_merge_dir)

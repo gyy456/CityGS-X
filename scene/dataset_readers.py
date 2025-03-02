@@ -121,6 +121,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, depths_para
             ), "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
 
         image_path = os.path.join(images_folder, os.path.basename(extr.name))
+        image_path = image_path.replace('JPG','jpg')
         image_name = os.path.basename(image_path).split(".")[0]
         image = Image.open(
             image_path
@@ -201,7 +202,7 @@ def storePly(path, xyz, rgb):
 
 
 
-def readColmapSceneInfo(path, images, eval, llffhold=83):
+def readColmapSceneInfo(path, images, eval, llffhold=97):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -214,24 +215,26 @@ def readColmapSceneInfo(path, images, eval, llffhold=83):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     reading_dir = "images" if images == None else images
+    depths_params = None
     depth_params_file = os.path.join(path, "sparse/0", "depth_params.json")
-    try:
-            with open(depth_params_file, "r") as f:
-                depths_params = json.load(f)
-            all_scales = np.array([depths_params[key]["scale"] for key in depths_params])
-            if (all_scales > 0).sum():
-                med_scale = np.median(all_scales[all_scales > 0])
-            else:
-                med_scale = 0
-            for key in depths_params:
-                depths_params[key]["med_scale"] = med_scale
+    if os.path.exists(depth_params_file):
+        try:
+                with open(depth_params_file, "r") as f:
+                    depths_params = json.load(f)
+                all_scales = np.array([depths_params[key]["scale"] for key in depths_params])
+                if (all_scales > 0).sum():
+                    med_scale = np.median(all_scales[all_scales > 0])
+                else:
+                    med_scale = 0
+                for key in depths_params:
+                    depths_params[key]["med_scale"] = med_scale
 
-    except FileNotFoundError:
-        print(f"Error: depth_params.json file not found at path '{depth_params_file}'.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"An unexpected error occurred when trying to open depth_params.json file: {e}")
-        sys.exit(1)
+        except FileNotFoundError:
+            print(f"Error: depth_params.json file not found at path '{depth_params_file}'.")
+            sys.exit(1)
+        except Exception as e:
+            print(f"An unexpected error occurred when trying to open depth_params.json file: {e}")
+            sys.exit(1)
 
 
 
@@ -247,8 +250,11 @@ def readColmapSceneInfo(path, images, eval, llffhold=83):
         train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
         test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
     else:
-        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
-        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+        # train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
+        # test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+        train_cam_infos = [c for idx, c in enumerate(cam_infos) if not os.path.exists(c.image_path.replace('train/', 'val/'))]
+        test_cam_infos  = [c for idx, c in enumerate(cam_infos) if os.path.exists(c.image_path.replace('train/', 'val/'))]
+
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
@@ -298,7 +304,7 @@ def readCamerasFromTransformsCity(
     if undistorted:
         print("Undistortion the images!!!")
         # TODO: Support undistortion here. Please refer to octree-gs implementation.
-    with open(os.path.join(path, transformsfile)) as json_file:
+    with open(os.path.join(transformsfile)) as json_file:
         contents = json.load(json_file)
         try:
             fovx = contents["camera_angle_x"]
@@ -319,8 +325,8 @@ def readCamerasFromTransformsCity(
         progress_bar = tqdm(frames, desc="Loading dataset")
 
         for idx, frame in enumerate(frames):
-            # cam_name = os.path.join(path, frame["file_path"] + extension)
-            cam_name = frame["file_path"]
+            cam_name = os.path.join(path, frame["file_path"] + extension)
+            # cam_name = frame["file_path"]
             if not os.path.exists(cam_name):
                 print(f"File {cam_name} not found, skipping...")
                 continue
@@ -344,8 +350,8 @@ def readCamerasFromTransformsCity(
                 w2c[:3, :3]
             )  # R is stored transposed due to 'glm' in CUDA code
             T = w2c[:3, 3]
-
-            image_path = os.path.join(path, cam_name)
+            # print(f'path{path}, cam_name{cam_name}')
+            image_path = os.path.join(cam_name)
             image_name = cam_name[-17:]  # Path(cam_name).stem
             image = Image.open(image_path)
 
@@ -366,6 +372,7 @@ def readCamerasFromTransformsCity(
                     FovY=FovY,
                     FovX=FovX,
                     image=None,
+                    depth_params = None,
                     image_path=image_path,
                     image_name=image_name,
                     width=image.size[0],
@@ -520,8 +527,8 @@ def readCityInfo(
     print("Load Cameras(train, test): ", len(train_cam_infos), len(test_cam_infos))
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
-
-    ply_path = glob.glob(os.path.join(path, "*.ply"))[0]
+    basename = os.path.basename(path)
+    ply_path = os.path.join(path, "B" + basename[1:] + ".ply")
     if os.path.exists(ply_path):
         try:
             pcd = fetchPly(ply_path)

@@ -1,7 +1,7 @@
 import torch
 import utils.general_utils as utils
 import torch.distributed as dist
-
+import torch.distributed.nn.functional as dist_func
 
 
 
@@ -53,6 +53,13 @@ def densification(iteration, scene, gaussians, batched_screenspace_pkg):
         timers.start("densification")
 
         timers.start("densification_update_stats")
+
+
+        # gpui_to_gpuj_imgk_size = batched_screenspace_pkg["gpui_to_gpuj_imgk_size"]
+        # local_to_gpuj_camk_send_ids = batched_screenspace_pkg["local_to_gpuj_camk_send_ids"]
+       
+
+
         for radii, visibility_filter, screenspace_mean2D, opacity, offset_selection_mask, voxel_visible_mask in zip(
             batched_screenspace_pkg["batched_locally_preprocessed_radii"],
             batched_screenspace_pkg["batched_locally_preprocessed_visibility_filter"],
@@ -60,11 +67,13 @@ def densification(iteration, scene, gaussians, batched_screenspace_pkg):
             batched_screenspace_pkg["batched_locally_opacity"],
             batched_screenspace_pkg["batched_locally_offset_mask"],
             batched_screenspace_pkg["batched_locally_voxel_mask"],
+            # batched_screenspace_pkg["batched_out_observe"],
         ):
             # gaussians.max_radii2D[visibility_filter] = torch.max(
             #     gaussians.max_radii2D[visibility_filter], radii[visibility_filter]
             # )
-            gaussians.training_statis(screenspace_mean2D, opacity, visibility_filter, offset_selection_mask, voxel_visible_mask)
+            # print(out_observe.shape, screenspace_mean2D.shape)
+            gaussians.training_statis(screenspace_mean2D, opacity, visibility_filter, offset_selection_mask, voxel_visible_mask )
             
             # gaussians.add_densification_stats(screenspace_mean2D, visibility_filter)
         timers.stop("densification_update_stats")
@@ -82,7 +91,6 @@ def densification(iteration, scene, gaussians, batched_screenspace_pkg):
 
 
             gaussians.adjust_anchor(
-                        # box3ds,
                         iteration=iteration,
                         check_interval=100, 
                         success_threshold=0.8,
@@ -96,12 +104,12 @@ def densification(iteration, scene, gaussians, batched_screenspace_pkg):
 
             # redistribute after densify_and_prune, because we have new gaussians to distribute evenly.
             if utils.get_denfify_iter() % args.redistribute_gaussians_frequency == 0:
-                # num_3dgs_before_redistribute = gaussians.get_xyz.shape[0]
+                # num_3dgs_before_redistribute = gaussians.get_anchor.shape[0]
                 num_3dgs_before_redistribute = gaussians.get_anchor.shape[0]
-                timers.start("redistribute_gaussians")
-                gaussians.redistribute_gaussians()   #anchor
-                timers.stop("redistribute_gaussians")
-                num_3dgs_after_redistribute = gaussians.get_xyz.shape[0]
+                timers.start("redistribute_anchors")
+                gaussians.redistribute_gaussians()     #anchor
+                timers.stop("redistribute_anchors")
+                num_3dgs_after_redistribute = gaussians.get_anchor.shape[0]
 
                 log_file.write(
                     "iteration[{},{}) redistribute. Now num of 3dgs before redistribute: {}. Now num of 3dgs after redistribute: {}. \n".format(
@@ -118,21 +126,11 @@ def densification(iteration, scene, gaussians, batched_screenspace_pkg):
 
             utils.inc_densify_iter()
 
-        # if (
-        #     utils.check_update_at_this_iter(
-        #         iteration, args.bsz, args.opacity_reset_interval, 0
-        #     )
-        #     and iteration + args.bsz <= args.opacity_reset_until_iter
-        # ):
-        #     timers.start("reset_opacity")
-        #     gaussians.reset_opacity()
-        #     timers.stop("reset_opacity")
-
         timers.stop("densification")
     else:
         if iteration > args.densify_from_iter and utils.check_update_at_this_iter(
             iteration, args.bsz, args.densification_interval, 0
-        ):
+        ) and iteration <= args.densify_until_iter:
             utils.check_memory_usage(
                 log_file, args, iteration, gaussians, before_densification_stop=False
             )
@@ -193,11 +191,11 @@ def gsplat_densification(iteration, scene, gaussians, batched_screenspace_pkg):
 
             # redistribute after densify_and_prune, because we have new gaussians to distribute evenly.
             if utils.get_denfify_iter() % args.redistribute_gaussians_frequency == 0:
-                num_3dgs_before_redistribute = gaussians.get_xyz.shape[0]
+                num_3dgs_before_redistribute = gaussians.get_anchor.shape[0]
                 timers.start("redistribute_gaussians")
                 gaussians.redistribute_gaussians()
                 timers.stop("redistribute_gaussians")
-                num_3dgs_after_redistribute = gaussians.get_xyz.shape[0]
+                num_3dgs_after_redistribute = gaussians.get_anchor.shape[0]
 
                 log_file.write(
                     "iteration[{},{}) redistribute. Now num of 3dgs before redistribute: {}. Now num of 3dgs after redistribute: {}. \n".format(

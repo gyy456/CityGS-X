@@ -133,7 +133,7 @@ def replicated_preprocess3dgs(
     ########## [START] Prepare Gaussians for rendering ##########
     if timers is not None:
         timers.start("forward_prepare_gaussians")
-    means3D = pc.get_xyz
+    means3D = pc.get_anchor
     opacity = pc.get_opacity
     scales = pc.get_scaling
     rotations = pc.get_rotation
@@ -310,7 +310,7 @@ def distributed_preprocess3dgs_and_all2all(
     ########## [START] Prepare Gaussians for rendering ##########
     if timers is not None:
         timers.start("forward_prepare_gaussians")
-    means3D = pc.get_xyz
+    means3D = pc.get_anchor
     opacity = pc.get_opacity
     scales = pc.get_scaling
     rotations = pc.get_rotation
@@ -789,6 +789,7 @@ def all_to_all_communication_final(
         # batched_ray_plane_redistributed,
         # batched_normals_redistributed,
         gpui_to_gpuj_imgk_size,
+        local_to_gpuj_camk_send_ids,
     )
 
 
@@ -1088,11 +1089,15 @@ def distributed_preprocess3dgs_and_all2all_final(
     bg_color: torch.Tensor,
     scaling_modifier=1.0,
     batched_voxel_mask=None, 
+    batched_nearest_cameras = None,
+    batched_nearest_voxel_mask = None,
     retain_grad=False,
     batched_strategies=None,
     mode="train",
-    return_plane : bool = True
+    return_plane : bool = True,
+    iterations = 0
 ):
+    
     """
     Render the scene.
 
@@ -1120,7 +1125,27 @@ def distributed_preprocess3dgs_and_all2all_final(
     batched_screenspace_params = []  # Per picture in a batch
     batched_means2D = []
     batched_radii = []
-    for viewpoint_camera,visible_mask,strategy in zip(batched_viewpoint_cameras, batched_voxel_mask, batched_strategies):
+    batched_out_observe = []
+    batched_cuda_args_test = []
+
+
+    batched_means3D_nearest = []
+    batched_opacity_nearest = []
+    batched_scales_nearest = []
+    batched_rotations_nearest = []
+    batched_colors_nearest = []
+
+
+    batched_means2D_nearest = []
+
+    batched_rasterizers_nearest = []
+    batched_screenspace_params_nearest = []
+    batched_radii_nearest = []
+    if timers is not None:
+        timers.start("forward_preprocess_gaussians")
+
+
+    for viewpoint_camera, viewpoint_camera_nearest, visible_mask, visible_mask_nearest, strategy in zip(batched_viewpoint_cameras, batched_nearest_cameras, batched_voxel_mask, batched_nearest_voxel_mask, batched_strategies):
         if mode == "train":
             xyz, color, opacity, scaling, rot, neural_opacity, mask = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, mode == "train")
             batched_neural_opacity.append(neural_opacity)
@@ -1133,28 +1158,7 @@ def distributed_preprocess3dgs_and_all2all_final(
         batched_scales.append(scaling)
         batched_rotations.append(rot)
         
-    # if timers is not None:
-    #     timers.stop("forward_prepare_gaussians")
-    # utils.check_initial_gpu_memory_usage("after forward_prepare_gaussians")
-    # ########## [END] Prepare Gaussians for rendering ##########
 
-    # if timers is not None:
-    #     timers.start("forward_preprocess_gaussians")
-    
-    # test
-    # means3D = xyz
-    # scales = scaling
-    # rotations = rot
-    # color = color
-    # opacity = opacity
-    # test
-    
-    # for i, (viewpoint_camera, strategy, means3D, color, opacity, scales, rotations) in enumerate(
-    #     zip(batched_viewpoint_cameras, batched_strategies, batched_means3D, batched_colors, batched_opacity, batched_scales, batched_rotations)
-    # ):
-    # for i, (viewpoint_camera, strategy) in enumerate(
-    #     zip(batched_viewpoint_cameras, batched_strategies)
-    # ):
         ########## [START] Prepare CUDA Rasterization Settings ##########
         cuda_args = get_cuda_args_final(strategy, mode)
         batched_cuda_args.append(cuda_args)
@@ -1192,6 +1196,7 @@ def distributed_preprocess3dgs_and_all2all_final(
             cuda_args=cuda_args,
         )
 
+
         if mode == "train":
             means2D.retain_grad()
 
@@ -1200,78 +1205,190 @@ def distributed_preprocess3dgs_and_all2all_final(
         batched_rasterizers.append(rasterizer)
         batched_screenspace_params.append(screenspace_params)
         batched_radii.append(radii)
+
+        if visible_mask_nearest is not None:
+            with torch.no_grad():
+                cuda_args_test = get_cuda_args_final(strategy, "test")
+                batched_cuda_args_test.append(cuda_args_test)
+                xyz_nearest, color_nearest, opacity_nearest, scaling_nearest, rot_nearest = generate_neural_gaussians(viewpoint_camera_nearest, pc, visible_mask_nearest, mode == "test")
+                tanfovx_nearest = math.tan(viewpoint_camera_nearest.FoVx * 0.5)
+                tanfovy_nearest = math.tan(viewpoint_camera_nearest.FoVy * 0.5)
+
+                raster_settings_nearest = GaussianRasterizationSettings(
+                image_height=int(viewpoint_camera_nearest.image_height),
+                image_width=int(viewpoint_camera_nearest.image_width),
+                tanfovx=tanfovx_nearest,
+                tanfovy=tanfovy_nearest,
+                bg=bg_color,
+                scale_modifier=scaling_modifier,
+                viewmatrix=viewpoint_camera_nearest.world_view_transform,
+                projmatrix=viewpoint_camera_nearest.full_proj_transform,
+                sh_degree=pc.active_sh_degree,
+                campos=viewpoint_camera_nearest.camera_center,
+                prefiltered=False,
+                render_geo = return_plane,
+                debug=pipe.debug,
+                )
+                batched_means3D_nearest.append(xyz_nearest)
+                batched_opacity_nearest.append(color_nearest)
+                batched_scales_nearest.append(opacity_nearest)
+                batched_rotations_nearest.append(scaling_nearest)
+                batched_colors_nearest.append(rot_nearest)
+                tanfovx = math.tan(viewpoint_camera_nearest.FoVx * 0.5)
+                tanfovy = math.tan(viewpoint_camera_nearest.FoVy * 0.5)
+                rasterizer_nearest  = GaussianRasterizer(raster_settings=raster_settings_nearest)
+                
+                means2D_nearest, _, conic_opacity_nearest,  radii_nearest, depths_nearest = rasterizer_nearest.preprocess_gaussians(
+                    means3D=xyz_nearest,
+                    scales=scaling_nearest,
+                    rotations=rot_nearest,
+                    shs=color_nearest,
+                    opacities=opacity_nearest,
+                    cuda_args=cuda_args_test,
+                )
+
+                batched_means2D_nearest.append(means2D_nearest)
+                screenspace_params_nearest = [means2D_nearest, color_nearest, conic_opacity_nearest, radii_nearest, depths_nearest, xyz_nearest, scaling_nearest, rot_nearest]
+                batched_rasterizers_nearest.append(rasterizer_nearest)
+                batched_screenspace_params_nearest.append(screenspace_params_nearest)
+            # batched_screenspace_params_nearest.append(screenspace_params_nearest)
+            # batched_radii_nearest.append(radii)
+
+        # batched_out_observe.append(out_observe)
     utils.check_initial_gpu_memory_usage("after forward_preprocess_gaussians")
     if timers is not None:
         timers.stop("forward_preprocess_gaussians")
 
     if utils.DEFAULT_GROUP.size() == 1:
-        batched_screenspace_pkg = {
-            "batched_locally_preprocessed_mean2D": batched_means2D,
-            "batched_locally_preprocessed_visibility_filter": [
-                radii > 0 for radii in batched_radii
-            ],
-            "batched_locally_preprocessed_radii": batched_radii,
-            "batched_locally_opacity": batched_neural_opacity,#gyy
-            "batched_locally_offset_mask":batched_mask, #gyy
-            "batched_locally_voxel_mask":batched_voxel_mask, #gyy
-            "batched_rasterizers": batched_rasterizers,
-            "batched_cuda_args": batched_cuda_args,
-            "batched_means2D_redistributed": [
-                screenspace_params[0]
-                for screenspace_params in batched_screenspace_params
-            ],
-            "batched_rgb_redistributed": [
-                screenspace_params[1]
-                for screenspace_params in batched_screenspace_params
-            ],
-            "batched_conic_opacity_redistributed": [
-                screenspace_params[2]
-                for screenspace_params in batched_screenspace_params
-            ],
-            "batched_radii_redistributed": [
-                screenspace_params[3]
-                for screenspace_params in batched_screenspace_params
-            ],
-            "batched_depths_redistributed": [
-                screenspace_params[4]
-                for screenspace_params in batched_screenspace_params
-            ],
-            "batched_means3D_redistributed": [
-                screenspace_params[5]
-                for screenspace_params in batched_screenspace_params
-            ],
-            "batched_scales_redistributed": [
-                screenspace_params[6]
-                for screenspace_params in batched_screenspace_params
-            ],
-            "batched_rotations_redistributed": [
-                screenspace_params[7]
-                for screenspace_params in batched_screenspace_params
-            ],
-            # "batched_view_points_redistributed": [
-            #     screenspace_params[5]
-            #     for screenspace_params in batched_screenspace_params
-            # ],
-            # "batched_ts_redistributed": [
-            #     screenspace_params[6]
-            #     for screenspace_params in batched_screenspace_params
-            # ],
-            # "batched_camera_planes_redistributed": [
-            #     screenspace_params[7]
-            #     for screenspace_params in batched_screenspace_params
-            # ],
-            # "batched_ray_plane_redistributed": [
-            #     screenspace_params[8]
-            #     for screenspace_params in batched_screenspace_params
-            # ],
-            # "batched_normals_redistributed": [
-            #     screenspace_params[9]
-            #     for screenspace_params in batched_screenspace_params
-            # ],
-            "gpui_to_gpuj_imgk_size": [
-                [[batched_means2D[i].shape[0] for i in range(len(batched_means2D))]]
-            ],
-        }
+        if iterations  > pipe.multi_view_weight_from_iter:
+            batched_screenspace_pkg = {
+                "batched_locally_preprocessed_mean2D": batched_means2D,
+                "batched_locally_preprocessed_visibility_filter": [
+                    radii > 0 for radii in batched_radii
+                ],
+                "batched_locally_preprocessed_radii": batched_radii,
+                "batched_locally_opacity": batched_neural_opacity,#gyy
+                "batched_locally_offset_mask":batched_mask, #gyy
+                "batched_locally_voxel_mask":batched_voxel_mask, #gyy
+                "batched_rasterizers": batched_rasterizers,
+                "batched_rasterizers_nearest": batched_rasterizers_nearest,
+                "batched_cuda_args": batched_cuda_args,
+                "batched_means2D_redistributed": [
+                    screenspace_params[0]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_rgb_redistributed": [
+                    screenspace_params[1]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_conic_opacity_redistributed": [
+                    screenspace_params[2]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_radii_redistributed": [
+                    screenspace_params[3]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_depths_redistributed": [
+                    screenspace_params[4]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_means3D_redistributed": [
+                    screenspace_params[5]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_scales_redistributed": [
+                    screenspace_params[6]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_rotations_redistributed": [
+                    screenspace_params[7]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_means2D_redistributed_nearest": [
+                    screenspace_params[0]
+                    for screenspace_params in batched_screenspace_params_nearest
+                ],
+                "batched_rgb_redistributed_nearest": [
+                    screenspace_params[1]
+                    for screenspace_params in batched_screenspace_params_nearest
+                ],
+                "batched_conic_opacity_redistributed_nearest": [
+                    screenspace_params[2]
+                    for screenspace_params in batched_screenspace_params_nearest
+                ],
+                "batched_radii_redistributed_nearest": [
+                    screenspace_params[3]
+                    for screenspace_params in batched_screenspace_params_nearest
+                ],
+                "batched_depths_redistributed_nearest": [
+                    screenspace_params[4]
+                    for screenspace_params in batched_screenspace_params_nearest
+                ],
+                "batched_means3D_redistributed_nearest": [
+                    screenspace_params[5]
+                    for screenspace_params in batched_screenspace_params_nearest
+                ],
+                "batched_scales_redistributed_nearest": [
+                    screenspace_params[6]
+                    for screenspace_params in batched_screenspace_params_nearest
+                ],
+                "batched_rotations_redistributed_nearest": [
+                    screenspace_params[7]
+                    for screenspace_params in batched_screenspace_params_nearest
+                ],
+                "gpui_to_gpuj_imgk_size": [
+                    [[batched_means2D[i].shape[0] for i in range(len(batched_means2D))]]
+                ],
+            }
+        else:
+            batched_screenspace_pkg = {
+                "batched_locally_preprocessed_mean2D": batched_means2D,
+                "batched_locally_preprocessed_visibility_filter": [
+                    radii > 0 for radii in batched_radii
+                ],
+                "batched_locally_preprocessed_radii": batched_radii,
+                "batched_locally_opacity": batched_neural_opacity,#gyy
+                "batched_locally_offset_mask":batched_mask, #gyy
+                "batched_locally_voxel_mask":batched_voxel_mask, #gyy
+                "batched_rasterizers": batched_rasterizers,
+                "batched_cuda_args": batched_cuda_args,
+                "batched_means2D_redistributed": [
+                    screenspace_params[0]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_rgb_redistributed": [
+                    screenspace_params[1]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_conic_opacity_redistributed": [
+                    screenspace_params[2]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_radii_redistributed": [
+                    screenspace_params[3]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_depths_redistributed": [
+                    screenspace_params[4]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_means3D_redistributed": [
+                    screenspace_params[5]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_scales_redistributed": [
+                    screenspace_params[6]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "batched_rotations_redistributed": [
+                    screenspace_params[7]
+                    for screenspace_params in batched_screenspace_params
+                ],
+                "gpui_to_gpuj_imgk_size": [
+                    [[batched_means2D[i].shape[0] for i in range(len(batched_means2D))]]
+                ],
+            }
         return batched_screenspace_pkg
 
     if timers is not None:
@@ -1291,12 +1408,49 @@ def distributed_preprocess3dgs_and_all2all_final(
         # batched_ray_plane_redistributed,
         # batched_normals_redistributed,
         gpui_to_gpuj_imgk_size,
+        local_to_gpuj_camk_send_ids,
     ) = all_to_all_communication_final(
         batched_rasterizers,
         batched_screenspace_params,
         batched_cuda_args,
         batched_strategies,
     )
+
+    if len(batched_rasterizers_nearest) != 0:
+        # with torch.no_grad():
+        (
+            batched_means2D_redistributed_nearest,
+            batched_rgb_redistributed_nearest,
+            batched_conic_opacity_redistributed_nearest,
+            batched_radii_redistributed_nearest,
+            batched_depths_redistributed_nearest,
+            batched_means3D_redistributed_nearest,
+            batched_scales_redistributed_nearest,
+            batched_rotations_redistributed_nearest,
+            # batched_view_points_redistributed,
+            # batched_ts_redistributed,
+            # batched_camera_planes_redistributed,
+            # batched_ray_plane_redistributed,
+            # batched_normals_redistributed,
+            _,
+            _,
+        ) = all_to_all_communication_final(
+            batched_rasterizers_nearest,
+            batched_screenspace_params_nearest,
+            batched_cuda_args_test,
+            batched_strategies,
+        )
+    else: 
+        batched_means2D_redistributed_nearest = None
+        batched_rgb_redistributed_nearest = None
+        batched_conic_opacity_redistributed_nearest = None
+        batched_radii_redistributed_nearest = None
+        batched_depths_redistributed_nearest = None
+        batched_means3D_redistributed_nearest = None
+        batched_scales_redistributed_nearest = None
+        batched_rotations_redistributed_nearest = None
+        batched_rasterizers_nearest = None
+        batched_cuda_args_test = None
     utils.check_initial_gpu_memory_usage("after forward_all_to_all_communication")
     if timers is not None:
         timers.stop("forward_all_to_all_communication")
@@ -1312,6 +1466,7 @@ def distributed_preprocess3dgs_and_all2all_final(
         "batched_locally_voxel_mask":batched_voxel_mask, #gyy
         "batched_rasterizers": batched_rasterizers,
         "batched_cuda_args": batched_cuda_args,
+        "batched_cuda_args_test": batched_cuda_args_test,
         "batched_means2D_redistributed": batched_means2D_redistributed,
         "batched_rgb_redistributed": batched_rgb_redistributed,
         "batched_conic_opacity_redistributed": batched_conic_opacity_redistributed,
@@ -1320,12 +1475,17 @@ def distributed_preprocess3dgs_and_all2all_final(
         "batched_means3D_redistributed": batched_means3D_redistributed,
         "batched_scales_redistributed": batched_scales_redistributed,
         "batched_rotations_redistributed": batched_rotations_redistributed,
-        # "batched_view_points_redistributed":batched_view_points_redistributed,
-        # "batched_ts_redistributed":   batched_ts_redistributed,
-        # "batched_camera_planes_redistributed": batched_camera_planes_redistributed,
-        # "batched_ray_plane_redistributed": batched_ray_plane_redistributed,
-        # "batched_normals_redistributed":   batched_normals_redistributed,
+        "batched_means2D_redistributed_nearest":  batched_means2D_redistributed_nearest,
+        "batched_rgb_redistributed_nearest" : batched_rgb_redistributed_nearest, 
+        "batched_conic_opacity_redistributed_nearest": batched_conic_opacity_redistributed_nearest,
+        "batched_radii_redistributed_nearest": batched_radii_redistributed_nearest,
+        "batched_depths_redistributed_nearest":batched_depths_redistributed_nearest,
+        "batched_means3D_redistributed_nearest":batched_means3D_redistributed_nearest,
+        "batched_scales_redistributed_nearest":batched_scales_redistributed_nearest,
+        "batched_rotations_redistributed_nearest":batched_rotations_redistributed_nearest,
+        "batched_rasterizers_nearest": batched_rasterizers_nearest,
         "gpui_to_gpuj_imgk_size": gpui_to_gpuj_imgk_size,
+        "local_to_gpuj_camk_send_ids":local_to_gpuj_camk_send_ids,
     }
     return batched_screenspace_pkg
 
@@ -1519,7 +1679,7 @@ def render_normal(viewpoint_cam, depth, offset=None, normal=None, scale=1):
     normal_ref = normal_ref.permute(2,0,1)
     return normal_ref
 
-def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  tile_size=16):
+def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  tile_size=16 , batched_cameras_nearest =None, rasterizer_nearest = None):
     """
     Render the scene.
     """
@@ -1532,13 +1692,14 @@ def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  
     batched_out_all_map = []
     batched_out_plane_depth = []
     batched_return_dict = []
-
+    batched_return_dict_nearest = []
 
     for cam_id in range(len(batched_screenspace_pkg["batched_rasterizers"])):
         strategy = batched_strategies[cam_id]
         if utils.GLOBAL_RANK not in strategy.gpu_ids:
             batched_rendered_image.append(None)
             batched_compute_locally.append(None)
+            batched_out_observe.append(None)
             return_dict =  {
                 # "render": rendered_image,
                 "viewspace_points": None,
@@ -1552,6 +1713,7 @@ def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  
                 "depth_normal": None
                 }
             batched_return_dict.append(return_dict)
+            batched_return_dict_nearest.append(None)
             continue
 
         # get compute_locally to know local workload in the end2end distributed training.
@@ -1580,17 +1742,23 @@ def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  
         xyz_redistributed = batched_screenspace_pkg["batched_means3D_redistributed"][cam_id]
         scales_redistributed = batched_screenspace_pkg["batched_scales_redistributed"][cam_id]
         rotations_redistributed = batched_screenspace_pkg["batched_rotations_redistributed"][cam_id]
-        # view_points_redistibuted = batched_screenspace_pkg["batched_view_points_redistributed"][cam_id]
-        # ts_redistributed = batched_screenspace_pkg["batched_ts_redistributed"][cam_id]
-        # camera_planes_redistributed = batched_screenspace_pkg["batched_camera_planes_redistributed"][cam_id]
-        # ray_plane_redistributed = batched_screenspace_pkg["batched_ray_plane_redistributed"][cam_id]
-        # normals_redistributed = batched_screenspace_pkg["batched_normals_redistributed"][cam_id]
 
 
 
-        # render
-        if timers is not None:
-            timers.start("forward_render_gaussians")
+
+        if  batched_screenspace_pkg["batched_means2D_redistributed_nearest"] != None:
+
+            means2D_redistributed_nearest  = batched_screenspace_pkg["batched_means2D_redistributed_nearest"][cam_id]
+            rgb_redistributed_nearest = batched_screenspace_pkg["batched_rgb_redistributed_nearest"][cam_id]
+            # rgb_redistributed_nearest = batched_screenspace_pkg["batched_rgb_redistributed"][cam_id]
+            conic_opacity_redistributed_nearest = batched_screenspace_pkg["batched_conic_opacity_redistributed_nearest"][cam_id]
+            radii_redistributed_nearest = batched_screenspace_pkg["batched_radii_redistributed_nearest"][cam_id]
+            depths_redistributed_nearest = batched_screenspace_pkg["batched_depths_redistributed_nearest"][cam_id]
+            xyz_redistributed_nearest = batched_screenspace_pkg["batched_means3D_redistributed_nearest"][cam_id]
+            scales_redistributed_nearset = batched_screenspace_pkg["batched_scales_redistributed_nearest"][cam_id]
+            rotations_redistributed_nearest =batched_screenspace_pkg["batched_rotations_redistributed_nearest"][cam_id]
+            rasterizer_nearest = batched_screenspace_pkg["batched_rasterizers_nearest"][cam_id]
+            cuda_args_test = batched_screenspace_pkg["batched_cuda_args_test"][cam_id]
         if means2D_redistributed.shape[0] < 10:
             # That means we do not have enough gaussians locally for rendering, that mainly happens because of insufficient initial points.
             rendered_image = (
@@ -1617,7 +1785,76 @@ def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  
             out_all_map = None
             out_observe = None
             out_plane_depth = None
+            nearest_render_pkg = None
         else:
+            nearest_render_pkg = None
+            if rasterizer.raster_settings.render_geo == True:
+                # nearest_render_pkg = None
+                if eval == True:
+                    rasterizer_nearest = None
+                if rasterizer_nearest is not None:
+                    with torch.no_grad():
+                        rotation_matrices = quaternion_to_matrix(torch.nn.functional.normalize(rotations_redistributed_nearest, p=2, dim=-1))
+                        smallest_axis_idx =torch.exp(scales_redistributed_nearset).min(dim=-1)[1][..., None, None].expand(-1, 3, -1)
+                        
+                        normal_global = rotation_matrices.gather(2, smallest_axis_idx).squeeze(dim=2)
+                        
+                        gaussian_to_cam_global = batched_cameras_nearest[cam_id].camera_center - xyz_redistributed_nearest
+                        neg_mask = (normal_global * gaussian_to_cam_global).sum(-1) < 0.0
+                        normal_global[neg_mask] = -normal_global[neg_mask]
+                        global_normal = normal_global
+                        
+                        local_normal = global_normal @ batched_cameras_nearest[cam_id].world_view_transform[:3,:3]
+                        pts_in_cam = xyz_redistributed_nearest @ batched_cameras_nearest[cam_id].world_view_transform[:3,:3] + batched_cameras_nearest[cam_id].world_view_transform[3,:3]
+                        depth_z = pts_in_cam[:, 2]
+                        local_distance = (local_normal * pts_in_cam).sum(-1).abs()
+                        input_all_map_1 = torch.zeros((means2D_redistributed_nearest.shape[0], 5)).cuda().float()
+                        input_all_map_1[:, :3] = local_normal
+                        input_all_map_1[:, 3] = 1.0
+                        input_all_map_1[:, 4] = local_distance
+                        screenspace_points_abs_1 = torch.zeros_like(xyz_redistributed_nearest, dtype=means2D_redistributed_nearest.dtype, device="cuda") + 0
+                        # try:
+                        #     screenspace_points_abs_1.retain_grad()
+                        #     # screenspace_points_abs.retain_grad()
+                        # except:
+                        #     pass
+                        means2D_abs_1 = screenspace_points_abs_1
+                        rendered_image_nearest, n_render, n_consider, n_contrib, out_observe, out_all_map_nearest, out_plane_depth_nearest = (
+                            rasterizer_nearest.render_gaussians(
+                                means2D=means2D_redistributed_nearest,
+                                means2D_abs= means2D_abs_1,
+                                conic_opacity=conic_opacity_redistributed_nearest, 
+                                rgb=rgb_redistributed_nearest,
+                                all_map = input_all_map_1,
+                                depths=depths_redistributed_nearest,
+                                radii=radii_redistributed_nearest,
+                                compute_locally=compute_locally,
+                                extended_compute_locally=extended_compute_locally,
+                                cuda_args=cuda_args_test,
+                            )
+                        )
+                        rendered_normal = out_all_map_nearest[0:3]
+                        rendered_alpha = out_all_map_nearest[3:4, ]
+                        rendered_distance = out_all_map_nearest[4:5, ]
+                        nearest_render_pkg =  {
+                        # "render": rendered_image,
+                        # "viewspace_points": means2D_redistributed,
+                        # "viewspace_points_abs": means2D_abs,
+                        # "visibility_filter" : radii_redistributed > 0,
+                        # "radii": radii_redistributed,
+                        # "out_observe": out_observe,
+                        "rendered_normal": rendered_normal,
+                        "plane_depth": out_plane_depth_nearest,
+                        "rendered_distance": rendered_distance,
+                        # "depth_normal": depth_normal,
+                        # "scales_redistributed": scales_redistributed,
+                        "rendered_alpha": rendered_alpha
+                            }
+            else: 
+                input_all_map = torch.zeros((means2D_redistributed.shape[0], 5)).cuda().float()
+            # render
+            if timers is not None:
+                timers.start("forward_render_gaussians")
             rotation_matrices = quaternion_to_matrix(torch.nn.functional.normalize(rotations_redistributed, p=2, dim=-1))
             smallest_axis_idx =torch.exp(scales_redistributed).min(dim=-1)[1][..., None, None].expand(-1, 3, -1)
             
@@ -1637,14 +1874,12 @@ def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  
             input_all_map[:, 3] = 1.0
             input_all_map[:, 4] = local_distance
 
-
             screenspace_points_abs = torch.zeros_like(xyz_redistributed, dtype=means2D_redistributed.dtype, requires_grad=True, device="cuda") + 0
             try:
                 screenspace_points_abs.retain_grad()
                 # screenspace_points_abs.retain_grad()
             except:
                 pass
-
             means2D_abs = screenspace_points_abs
             rendered_image, n_render, n_consider, n_contrib, out_observe, out_all_map, out_plane_depth = (
                 rasterizer.render_gaussians(
@@ -1676,21 +1911,22 @@ def render_final(batched_cameras, batched_screenspace_pkg, batched_strategies,  
                         "plane_depth": out_plane_depth,
                         "rendered_distance": rendered_distance,
                         "depth_normal": depth_normal,
-                        "scales_redistributed": scales_redistributed
+                        "scales_redistributed": scales_redistributed,
+                        "rendered_alpha": rendered_alpha
                         }
         batched_rendered_image.append(rendered_image)
         batched_out_all_map.append(out_all_map)
         batched_out_observe.append(out_observe)
         batched_out_plane_depth.append(out_plane_depth)
         batched_return_dict.append(return_dict)
-
+        batched_return_dict_nearest.append(nearest_render_pkg)
 
         if timers is not None:
             timers.stop("forward_render_gaussians")
     utils.check_initial_gpu_memory_usage("after forward_render_gaussians")
 
     ########## [END] CUDA Rasterization Call ##########
-    return batched_rendered_image, batched_compute_locally, batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict
+    return batched_rendered_image, batched_compute_locally, batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict, batched_return_dict_nearest
 def gsplat_render_final(batched_screenspace_pkg, batched_strategies, tile_size=16):
     """
     Render the scene.
