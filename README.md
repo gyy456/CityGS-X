@@ -3,7 +3,7 @@
 
 [Yuanyuan Gao*](https://scholar.google.com/citations?hl=en&user=1zDq0q8AAAAJ), [Hao Li*](https://lifuguan.github.io/), Jiaqi Chen*, Zhengyu Zou, [Zhihang Zhong†](https://zzh-tech.github.io), [Dingwen Zhang†](https://vision-intelligence.com.cn), [Xiao Sun](https://jimmysuen.github.io) Junwei Han<br>(\* indicates equal contribution, † means Co-corresponding author)<br>
 
-![Teaser image](assets/cityx_tease.png)
+![Teaser image](assets/cityx_tease.jpg)
 
 ## Todo List
 - [ ] Release the preprocessed data.
