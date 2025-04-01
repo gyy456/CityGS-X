@@ -1,4 +1,6 @@
-# CityGS-X: A Scalable Architecture for Efficient and Geometrically Accurate Large-Scale Scene Reconstruction
+# Offical Implementation of **CityGS-X**
+| CityGS-X : A Scalable Architecture for Efficient and Geometrically Accurate Large-Scale Scene Reconstruction
+
 [**Webpage**](https://lifuguan.github.io/CityGS-X/) | [**Full Paper**](https://arxiv.org/abs/2503.23044) <br>
 
 [Yuanyuan Gao*](https://scholar.google.com/citations?hl=en&user=1zDq0q8AAAAJ), [Hao Li*](https://lifuguan.github.io/), Jiaqi Chen*, Zhengyu Zou, [Zhihang Zhong†](https://zzh-tech.github.io), [Dingwen Zhang†](https://vision-intelligence.com.cn), [Xiao Sun](https://jimmysuen.github.io), Junwei Han<br>(\* indicates equal contribution, † means Co-corresponding author)<br>
