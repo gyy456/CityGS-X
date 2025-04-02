@@ -222,7 +222,6 @@ class Scene:
             self.gaussians.set_level(points, self.train_cameras, resolution_scales, args.dist_ratio, args.init_level, args.levels)
             self.gaussians.create_from_pcd(points, self.cameras_extent)
 
-
         utils.check_initial_gpu_memory_usage("after initializing point cloud")
         utils.log_cpu_memory_usage("after loading initial 3dgs points")
     def save(self, iteration):

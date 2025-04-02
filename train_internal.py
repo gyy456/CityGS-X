@@ -689,7 +689,6 @@ def training_report(
                             #     os.path.join(depths_path, gt_camera.image_name + ".png"),
                             # )
 
-
                             normal = normal.permute(1,2,0)
                             normal = normal/(normal.norm(dim=-1, keepdim=True)+1.0e-8)
                             normal = normal.detach().cpu().numpy()

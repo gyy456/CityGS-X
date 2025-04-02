@@ -1158,7 +1158,6 @@ def distributed_preprocess3dgs_and_all2all_final(
         batched_scales.append(scaling)
         batched_rotations.append(rot)
         
-
         ########## [START] Prepare CUDA Rasterization Settings ##########
         cuda_args = get_cuda_args_final(strategy, mode)
         batched_cuda_args.append(cuda_args)
@@ -1195,7 +1194,6 @@ def distributed_preprocess3dgs_and_all2all_final(
             opacities=opacity,
             cuda_args=cuda_args,
         )
-
 
         if mode == "train":
             means2D.retain_grad()

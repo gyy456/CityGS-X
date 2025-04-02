@@ -1766,7 +1766,6 @@ class GaussianModel:
         torch.cuda.empty_cache()
 
 
-
 def get_sparse_ids(tensors):
     sparse_ids = None
     with torch.no_grad():
