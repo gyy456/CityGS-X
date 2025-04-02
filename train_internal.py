@@ -18,6 +18,8 @@ from gaussian_renderer.workload_division import (
 )
 from gaussian_renderer.loss_distribution import (
     load_camera_from_cpu_to_all_gpu,
+    load_depth_from_cpu_to_all_gpu,
+    load_gray_image_from_cpu_to_all_gpu,
     load_camera_from_cpu_to_all_gpu_for_eval,
     batched_loss_computation,
 )
@@ -183,6 +185,22 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
             load_camera_from_cpu_to_all_gpu(
                 batched_cameras, batched_strategies, gpuid2tasks
             )
+
+            if iteration >  opt_args.multi_view_weight_from_iter:
+
+                load_gray_image_from_cpu_to_all_gpu(
+                    batched_cameras, batched_strategies, gpuid2tasks
+                                                    )
+                load_gray_image_from_cpu_to_all_gpu(
+                    batched_nearest_cameras, batched_strategies, gpuid2tasks)
+
+            if iteration > opt_args.dpt_loss_from_iter:
+                load_depth_from_cpu_to_all_gpu(
+                     batched_cameras, batched_strategies, gpuid2tasks
+                )
+
+
+
             # load_camera_from_cpu_to_all_gpu(
             #     batched_nearest_cameras, batched_strategies, gpuid2tasks  # make sure don't divide the same camera twice  # gyy
             # )
@@ -432,6 +450,13 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
             viewpoint_cam
         ) in batched_cameras:  # Release memory of locally rendered original_image
             viewpoint_cam.original_image = None
+            viewpoint_cam.image_gray = None 
+            viewpoint_cam.invdepthmap = None
+        if iteration >  opt_args.multi_view_weight_from_iter:
+            for (
+                nearest_camera
+            ) in batched_nearest_cameras: 
+                nearest_camera.image_gray = None
         if args.nsys_profile:
             nvtx.range_pop()
         if utils.check_enable_python_timer():

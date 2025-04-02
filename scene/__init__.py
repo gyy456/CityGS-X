@@ -53,10 +53,7 @@ class Scene:
             )
         elif "MatrixCity" in args.source_path:  # This is for matrixcity
             scene_info = sceneLoadTypeCallbacks["City"](
-                args.source_path,
-                args.random_background,
-                args.white_background,
-                llffhold=args.llffhold,
+                args.source_path, args.images, args.eval, args.llffhold
             )
         else:
             raise ValueError("No valid dataset found in the source path")
@@ -300,6 +297,7 @@ class Scene_precess:
         log_file = utils.get_log_file()
 
         utils.log_cpu_memory_usage("before loading images meta data")
+        print(os.path.join(args.source_path, "sparse"))
         if os.path.exists(
             os.path.join(args.source_path, "sparse")
         ):  # This is the format from colmap.
@@ -473,21 +471,6 @@ class Scene_precess:
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class SceneDataset:
     def __init__(self, cameras):
         self.cameras = cameras
@@ -558,10 +541,10 @@ class SceneDataset:
             batched_cameras.append(camera)
             batched_cameras_uid.append(camera.uid)
             if eval == False:
-                if len(camera.nearest_id) > 0 :
+                if len(camera.nearest_id) > 4:
                     for idx in random.sample(camera.nearest_id,1):
                         while self.cameras[idx].uid in batched_cameras_uid: 
-                            idx = random.sample(camera.nearest_id,1)[0]    #如果id与元batch重复 重新选camera
+                            idx = random.sample(camera.nearest_id,1)[0]    #如果id与origin batch重复 重新选camera
                         batched_nearest_cameras.append(self.cameras[idx])
                         batched_nearest_cameras_uid.append(self.cameras[idx].uid)
                 else:

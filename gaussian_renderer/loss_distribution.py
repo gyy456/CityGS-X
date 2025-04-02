@@ -2358,6 +2358,276 @@ def get_coverage_y_max(tile_ids_r):
     return min(tile_ids_r * utils.BLOCK_Y, utils.IMG_H)
 
 
+def load_depth_from_cpu_to_all_gpu(batched_cameras, batched_strategies, gpuid2tasks):
+    timers = utils.get_timers()
+    args = utils.get_args()
+
+    # Asynchronously load ground-truth image to GPU
+    timers.start("load_gt_image_to_gpu")
+
+    def load_camera_from_cpu_to_gpu(first_task, last_task):
+        coverage_min_max_y = {}
+        coverage_min_y_first_task = get_coverage_y_min(first_task[1])
+        coverage_max_y_last_task = get_coverage_y_max(last_task[2])
+        for camera_id_in_batch in range(first_task[0], last_task[0] + 1):
+            coverage_min_y = 0
+            if camera_id_in_batch == first_task[0]:
+                coverage_min_y = coverage_min_y_first_task
+            coverage_max_y = utils.IMG_H
+            if camera_id_in_batch == last_task[0]:
+                coverage_max_y = coverage_max_y_last_task
+
+            batched_cameras[camera_id_in_batch].invdepthmap = (
+                batched_cameras[camera_id_in_batch]
+                .invdepthmap_backup
+                .cuda()
+            )
+            # if batched_cameras[camera_id_in_batch].depth_mask is not None:
+            #     batched_cameras[camera_id_in_batch].depth_mask = (
+            #         batched_cameras[camera_id_in_batch].depth_mask.cuda()
+            #     )
+            # batched_cameras[camera_id_in_batch].image_gray = (
+            #     batched_cameras[camera_id_in_batch].image_gray.cuda()
+            # )
+            
+
+
+
+
+            coverage_min_max_y[camera_id_in_batch] = (coverage_min_y, coverage_max_y)
+        return coverage_min_max_y
+
+    if args.distributed_dataset_storage:
+        if args.local_sampling:
+            # TODO: may preloaded
+            first_task = gpuid2tasks[utils.GLOBAL_RANK][0]
+            last_task = gpuid2tasks[utils.GLOBAL_RANK][-1]
+            _ = load_camera_from_cpu_to_gpu(first_task, last_task)
+        elif utils.IN_NODE_GROUP.rank() == 0:
+            in_node_first_rank = utils.GLOBAL_RANK
+            in_node_last_rank = in_node_first_rank + utils.IN_NODE_GROUP.size() - 1
+            first_task = gpuid2tasks[in_node_first_rank][0]
+            last_task = gpuid2tasks[in_node_last_rank][-1]
+            coverage_min_max_y_gpu0 = load_camera_from_cpu_to_gpu(first_task, last_task)
+    else:
+        first_task = gpuid2tasks[utils.GLOBAL_RANK][0]
+        last_task = gpuid2tasks[utils.GLOBAL_RANK][-1]
+        _ = load_camera_from_cpu_to_gpu(first_task, last_task)
+
+    timers.stop("load_gt_image_to_gpu")
+
+    if args.local_sampling:
+        return
+
+    # Asynchronously send the original image from gpu0 to all GPUs in the same node.
+    timers.start("scatter_gt_image")
+    if args.distributed_dataset_storage:
+        comm_ops = []
+        if utils.IN_NODE_GROUP.rank() == 0:
+            in_node_first_rank = utils.get_first_rank_on_cur_node()
+            in_node_last_rank = in_node_first_rank + utils.IN_NODE_GROUP.size() - 1
+            for rank in range(in_node_first_rank, in_node_last_rank + 1):
+                if rank == utils.GLOBAL_RANK:
+                    continue
+                for task in gpuid2tasks[rank]:
+                    camera_id = task[0]
+                    coverage_min_y = get_coverage_y_min(task[1])
+                    coverage_max_y = get_coverage_y_max(task[2])
+
+                    coverage_min_y_gpu0, coverage_max_y_gpu0 = coverage_min_max_y_gpu0[
+                        camera_id
+                    ]
+                    if (
+                        coverage_min_y == coverage_min_y_gpu0
+                        and coverage_max_y == coverage_max_y_gpu0
+                    ):
+                        # less memory copy
+                        op = torch.distributed.P2POp(
+                            dist.isend,
+                            batched_cameras[camera_id].invdepthmap.contiguous(),
+                            rank,
+                        )
+                    else:
+                        send_tensor = (
+                            batched_cameras[camera_id]
+                            .invdepthmap
+                            .contiguous()
+                        )
+                        op = torch.distributed.P2POp(dist.isend, send_tensor, rank)
+                    comm_ops.append(op)
+
+            reqs = torch.distributed.batch_isend_irecv(comm_ops)
+            for req in reqs:
+                req.wait()
+
+            for task in gpuid2tasks[utils.GLOBAL_RANK]:
+                camera_id = task[0]
+                coverage_min_y_gpu0, coverage_max_y_gpu0 = coverage_min_max_y_gpu0[
+                    camera_id
+                ]
+                coverage_min_y = get_coverage_y_min(task[1])
+                coverage_max_y = get_coverage_y_max(task[2])
+                batched_cameras[camera_id].invdepthmap = (
+                    batched_cameras[camera_id]
+                    .invdepthmap
+                    .contiguous()
+                )
+        else:
+            in_node_first_rank = utils.get_first_rank_on_cur_node()
+            recv_buffer_list = []
+            for task in gpuid2tasks[utils.GLOBAL_RANK]:
+                coverage_min_y = get_coverage_y_min(task[1])
+                coverage_max_y = get_coverage_y_max(task[2])
+                recv_buffer = torch.zeros(
+                    (1, utils.IMG_H, utils.IMG_W),
+                    dtype=torch.float32,
+                    device="cuda",
+                )
+                recv_buffer_list.append(recv_buffer)
+                op = torch.distributed.P2POp(
+                    dist.irecv, recv_buffer, in_node_first_rank
+                )
+                comm_ops.append(op)
+
+            reqs = torch.distributed.batch_isend_irecv(comm_ops)
+            for req in reqs:
+                req.wait()
+
+            for idx, task in enumerate(gpuid2tasks[utils.GLOBAL_RANK]):
+                batched_cameras[task[0]].invdepthmap = recv_buffer_list[idx]
+
+    timers.stop("scatter_gt_image")
+
+
+
+def load_gray_image_from_cpu_to_all_gpu(batched_cameras, batched_strategies, gpuid2tasks):
+
+    args = utils.get_args()
+
+
+    def load_camera_from_cpu_to_gpu(first_task, last_task):
+        coverage_min_max_y = {}
+        coverage_min_y_first_task = get_coverage_y_min(first_task[1])
+        coverage_max_y_last_task = get_coverage_y_max(last_task[2])
+        for camera_id_in_batch in range(first_task[0], last_task[0] + 1):
+            coverage_min_y = 0
+            if camera_id_in_batch == first_task[0]:
+                coverage_min_y = coverage_min_y_first_task
+            coverage_max_y = utils.IMG_H
+            if camera_id_in_batch == last_task[0]:
+                coverage_max_y = coverage_max_y_last_task
+
+            batched_cameras[camera_id_in_batch].image_gray = (
+                batched_cameras[camera_id_in_batch]
+                .image_gray_backup
+                .cuda()
+            )
+
+
+
+            coverage_min_max_y[camera_id_in_batch] = (coverage_min_y, coverage_max_y)
+        return coverage_min_max_y
+
+    if args.distributed_dataset_storage:
+        if args.local_sampling:
+            # TODO: may preloaded
+            first_task = gpuid2tasks[utils.GLOBAL_RANK][0]
+            last_task = gpuid2tasks[utils.GLOBAL_RANK][-1]
+            _ = load_camera_from_cpu_to_gpu(first_task, last_task)
+        elif utils.IN_NODE_GROUP.rank() == 0:
+            in_node_first_rank = utils.GLOBAL_RANK
+            in_node_last_rank = in_node_first_rank + utils.IN_NODE_GROUP.size() - 1
+            first_task = gpuid2tasks[in_node_first_rank][0]
+            last_task = gpuid2tasks[in_node_last_rank][-1]
+            coverage_min_max_y_gpu0 = load_camera_from_cpu_to_gpu(first_task, last_task)
+    else:
+        first_task = gpuid2tasks[utils.GLOBAL_RANK][0]
+        last_task = gpuid2tasks[utils.GLOBAL_RANK][-1]
+        _ = load_camera_from_cpu_to_gpu(first_task, last_task)
+
+
+
+    if args.local_sampling:
+        return
+
+    # Asynchronously send the original image from gpu0 to all GPUs in the same node.
+
+    if args.distributed_dataset_storage:
+        comm_ops = []
+        if utils.IN_NODE_GROUP.rank() == 0:
+            in_node_first_rank = utils.get_first_rank_on_cur_node()
+            in_node_last_rank = in_node_first_rank + utils.IN_NODE_GROUP.size() - 1
+            for rank in range(in_node_first_rank, in_node_last_rank + 1):
+                if rank == utils.GLOBAL_RANK:
+                    continue
+                for task in gpuid2tasks[rank]:
+                    camera_id = task[0]
+                    coverage_min_y = get_coverage_y_min(task[1])
+                    coverage_max_y = get_coverage_y_max(task[2])
+
+                    coverage_min_y_gpu0, coverage_max_y_gpu0 = coverage_min_max_y_gpu0[
+                        camera_id
+                    ]
+                    if (
+                        coverage_min_y == coverage_min_y_gpu0
+                        and coverage_max_y == coverage_max_y_gpu0
+                    ):
+                        # less memory copy
+                        op = torch.distributed.P2POp(
+                            dist.isend,
+                            batched_cameras[camera_id].image_gray.contiguous(),
+                            rank,
+                        )
+                    else:
+                        send_tensor = (
+                            batched_cameras[camera_id]
+                            .image_gray
+                            .contiguous()
+                        )
+                        op = torch.distributed.P2POp(dist.isend, send_tensor, rank)
+                    comm_ops.append(op)
+
+            reqs = torch.distributed.batch_isend_irecv(comm_ops)
+            for req in reqs:
+                req.wait()
+
+            for task in gpuid2tasks[utils.GLOBAL_RANK]:
+                camera_id = task[0]
+                coverage_min_y_gpu0, coverage_max_y_gpu0 = coverage_min_max_y_gpu0[
+                    camera_id
+                ]
+                coverage_min_y = get_coverage_y_min(task[1])
+                coverage_max_y = get_coverage_y_max(task[2])
+                batched_cameras[camera_id].image_gray = (
+                    batched_cameras[camera_id]
+                    .image_gray
+                    .contiguous()
+                )
+        else:
+            in_node_first_rank = utils.get_first_rank_on_cur_node()
+            recv_buffer_list = []
+            for task in gpuid2tasks[utils.GLOBAL_RANK]:
+                coverage_min_y = get_coverage_y_min(task[1])
+                coverage_max_y = get_coverage_y_max(task[2])
+                recv_buffer = torch.zeros(
+                    (1, utils.IMG_H, utils.IMG_W),
+                    dtype=torch.float32,
+                    device="cuda",
+                )
+                recv_buffer_list.append(recv_buffer)
+                op = torch.distributed.P2POp(
+                    dist.irecv, recv_buffer, in_node_first_rank
+                )
+                comm_ops.append(op)
+
+            reqs = torch.distributed.batch_isend_irecv(comm_ops)
+            for req in reqs:
+                req.wait()
+
+            for idx, task in enumerate(gpuid2tasks[utils.GLOBAL_RANK]):
+                batched_cameras[task[0]].image_gray = recv_buffer_list[idx]
+
+
 def load_camera_from_cpu_to_all_gpu_for_eval(
     batched_cameras, batched_strategies, gpuid2tasks
 ):
@@ -2751,21 +3021,20 @@ def batched_loss_computation(
                     # else:
                     #     scaling_reg = torch.tensor(0.0, device="cuda")
                     # loss += 0.01 * scaling_reg # 0.01
-            
-                
             if iterations > opt.dpt_loss_from_iter:
                 # if depth is not None:
                 depth = render_pkg["plane_depth"]
-                depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=100000)
+                depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=50000)
                 if depth_l1_weight(iterations) > 0 and camera.depth_reliable:
                     invDepth = 1/ depth
                     mono_invdepth = camera.invdepthmap.cuda()
-                    mask = camera.depth_mask.cuda()
+                    # mask = camera.depth_mask.cuda()
+                    mask = mono_invdepth != 0
                     # mask = mono_invdepth != 0
                     zero_mask_tensor = torch.zeros_like(invDepth, dtype=torch.bool)
                     zero_mask_tensor[:, coverage_min_y:coverage_max_y, :] = 1
-                    mask_tensor = zero_mask_tensor
-                    mask_tensor = zero_mask_tensor & mask.unsqueeze(0)
+                    # mask_tensor = zero_mask_tensor
+                    mask_tensor = zero_mask_tensor & mask
                     Ll1depth_pure = torch.abs((invDepth[mask_tensor]  - mono_invdepth[mask_tensor]) ).mean()
                     Ll1depth = depth_l1_weight(iterations) * Ll1depth_pure 
                     # loss += Ll1depth
@@ -2801,12 +3070,12 @@ def batched_loss_computation(
                 #     ncc_weight = (iterations-opt.multi_view_weight_from_iter) / (opt.multi_view_weight_from_iter*2-opt.multi_view_weight_from_iter) * 0.2
                 #     geo_weight = (iterations-opt.multi_view_weight_from_iter) / (opt.multi_view_weight_from_iter*2-opt.multi_view_weight_from_iter) * 0.05
                 # else:
-                #     ncc_weight = 0.2
-                #     geo_weight = 0.05
+                ncc_weight = 0.2
+                geo_weight = 0.05
                 pixel_noise_th = opt.multi_view_pixel_noise_th
                 # # total_patch_size = (patch_size * 2 + 1) ** 2
-                ncc_weight = opt.multi_view_ncc_weight
-                geo_weight = opt.multi_view_geo_weight
+                # ncc_weight = opt.multi_view_ncc_weight
+                # geo_weight = opt.multi_view_geo_weight
                 ## compute geometry consistency mask and loss
                 H, W = render_pkg['plane_depth'].squeeze().shape
                 ix, iy = torch.meshgrid(
@@ -2843,7 +3112,7 @@ def batched_loss_computation(
                     weights[~d_mask] = 0
                 d_mask = mask & d_mask
                 if d_mask.sum() > 0:
-                    geo_loss = geo_weight * ((weights * pixel_noise)[d_mask]).mean()
+                    # geo_loss = geo_weight * ((weights * pixel_noise)[d_mask]).mean()
                     # if torch.isnan(geo_loss) or not torch.isfinite(geo_loss):
                     #     print(f'[fuck geo_loss] {geo_loss.shape , camera.image_name}')
                     #     geo_loss = 0
@@ -2852,9 +3121,9 @@ def batched_loss_computation(
                     with torch.no_grad():
                         ## sample mask
                         if iterations < opt.multi_view_weight_from_iter * 1.2:
-                            patch_size, sample_num, scale, pixel_noise_th = 3, 10240, 4, 1.0
+                            patch_size, sample_num, scale, pixel_noise_th = 7, 10240, 4, 1.0
                         elif iterations < opt.multi_view_weight_from_iter * 1.5:
-                            patch_size, sample_num, scale, pixel_noise_th = 3, 10240, 4, 1.0
+                            patch_size, sample_num, scale, pixel_noise_th = 5, 20480, 4, 1.0
                         elif iterations < opt.multi_view_weight_from_iter * 2:
                             patch_size, sample_num, scale, pixel_noise_th = 3, 102400, 2, 1.0
                         else:

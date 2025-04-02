@@ -112,7 +112,7 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
         progress_bar.update(args.bsz)
 
         num_camera_to_load = min(args.bsz, num_cameras - idx + 1)
-        batched_cameras = dataset.get_batched_cameras(num_camera_to_load, shuffle =False)
+        batched_cameras, _ = dataset.get_batched_cameras(num_camera_to_load, shuffle =False)
         batched_strategies, gpuid2tasks = start_strategy_final(
             batched_cameras, strategy_history
         )
@@ -120,11 +120,14 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
             batched_cameras, batched_strategies, gpuid2tasks
         )
         batched_voxel_mask = [] 
+        batched_nearest_voxel_mask= []
+        batched_nearest_cameras= []
         for camera in batched_cameras:
             gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
             voxel_visible_mask = prefilter_voxel(camera, gaussians, pipeline, background)
             batched_voxel_mask.append(voxel_visible_mask)
-
+            batched_nearest_voxel_mask.append(None)
+            batched_nearest_cameras.append(None)
         batched_screenspace_pkg = distributed_preprocess3dgs_and_all2all_final(
             batched_cameras,
             gaussians,
@@ -132,13 +135,15 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
             background,
             batched_voxel_mask=batched_voxel_mask,
             batched_strategies=batched_strategies,
+            batched_nearest_cameras = batched_nearest_cameras,
+            batched_nearest_voxel_mask = batched_nearest_voxel_mask,
             mode="test",
             return_plane = True
         )
 
 
 
-        batched_image, batched_compute_locally,  batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict = render_final(batched_cameras, batched_screenspace_pkg, batched_strategies
+        batched_image, batched_compute_locally,  batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict,  _ = render_final(batched_cameras, batched_screenspace_pkg, batched_strategies
             )
 
         for camera_id, (image, gt_camera, render_pkg) in enumerate(
@@ -189,25 +194,27 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
             gt_image = torch.clamp(gt_camera.original_image / 255.0, 0.0, 1.0)
 
             if utils.GLOBAL_RANK == 0:
-                torchvision.utils.save_image(
-                    image,
-                    os.path.join(render_path, gt_camera.image_name + ".png"),
-                )
-                torchvision.utils.save_image(
-                    gt_image,
-                    os.path.join(gts_path, gt_camera.image_name + ".png"),
-                )
+                # torchvision.utils.save_image(
+                #     image,
+                #     os.path.join(render_path, gt_camera.image_name + ".png"),
+                # )
+                # torchvision.utils.save_image(
+                #     gt_image,
+                #     os.path.join(gts_path, gt_camera.image_name + ".png"),
+                # )
 
                 depth_tsdf = depth.clone().squeeze(0)
+                depth_RED = visualize_scalars(torch.log(depth.squeeze(0) + 1e-8).detach().cpu())
+
                 depth = depth.detach().cpu().numpy().squeeze(0)
                 depth_i = (depth - depth.min()) / (depth.max() - depth.min() + 1e-20)
                 depth_i = (depth_i * 255).clip(0, 255).astype(np.uint8)
                 depth_color = cv2.applyColorMap(depth_i, cv2.COLORMAP_JET)
-                cv2.imwrite(os.path.join(depths_path,  gt_camera.image_name + ".png"), depth_color)
+                # cv2.imwrite(os.path.join(depths_path,  gt_camera.image_name + ".png"), depth_color)
 
-                depth_RED = visualize_scalars(torch.log(depth + 1e-8).detach().cpu())
+                # depth_RED = visualize_scalars(torch.log(depth + 1e-8).detach().cpu())
 
-                plt.imsave(os.path.join(depths_path, 'depth-' +(gt_camera.image_name + '.png') ), depth_RED)
+                # plt.imsave(os.path.join(depths_path, 'depth-' +(gt_camera.image_name + '.png') ), depth_RED)
 
                 normal = normal.permute(1,2,0)
                 normal = normal/(normal.norm(dim=-1, keepdim=True)+1.0e-8)
@@ -217,7 +224,7 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
                 #     torch.tensor(normal).permute(2,0,1)/255.0,
                 #     os.path.join(render_normal_path, gt_camera.image_name + ".png"),
                 # )
-                cv2.imwrite(os.path.join(render_normal_path,  gt_camera.image_name + ".png"), normal)
+                # cv2.imwrite(os.path.join(render_normal_path,  gt_camera.image_name + ".png"), normal)
 
                 if use_depth_filter:
                     view_dir = torch.nn.functional.normalize(view.get_rays(), p=2, dim=-1)
@@ -227,7 +234,7 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
                     angle = torch.acos(dot)
                     mask = angle > (80 / 180 * 3.14159)
                     depth_tsdf[mask] = 0
-                depths_tsdf_fusion.append(depth_tsdf.squeeze())
+                depths_tsdf_fusion.append(depth_tsdf.squeeze().cpu())
     
 
             gt_camera.original_image = None
@@ -238,7 +245,7 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
         if volume is not None:
             depths_tsdf_fusion = torch.stack(depths_tsdf_fusion, dim=0)
             for idx, view in enumerate(tqdm(views, desc="TSDF Fusion progress")):
-                ref_depth = depths_tsdf_fusion[idx]
+                ref_depth = depths_tsdf_fusion[idx].cuda()
                 H, W = ref_depth.squeeze().shape
                 if use_depth_filter and len(view.nearest_id) > 2:
                     nearest_world_view_transforms = scene.world_view_transforms[view.nearest_id]
@@ -254,7 +261,7 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
                     pts_in_nearest_cam = torch.matmul(nearest_world_view_transforms[:,None,:3,:3].expand(num_n,H*W,3,3).transpose(-1,-2), 
                                                     pts[None,:,:,None].expand(num_n,H*W,3,1))[...,0] + nearest_world_view_transforms[:,None,3,:3] # b, pts, 3
 
-                    depths_nearest = depths_tsdf_fusion[view.nearest_id][:,None]
+                    depths_nearest = depths_tsdf_fusion[view.nearest_id][:,None].cuda()
                     pts_projections = torch.stack(
                                     [pts_in_nearest_cam[...,0] * view.Fx / pts_in_nearest_cam[...,2] + view.Cx,
                                     pts_in_nearest_cam[...,1] * view.Fy / pts_in_nearest_cam[...,2] + view.Cy], -1).float()

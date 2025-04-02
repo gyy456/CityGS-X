@@ -21,16 +21,32 @@ import json
 from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser
-
+from torchvision import transforms
 
 def readImages(renders_dir, gt_dir):
     print("Reading images from", renders_dir)
     renders = []
     gts = []
     image_names = []
+
+    # if True:
+    #     resize_transform = transforms.Resize(
+    #         (int(render.height / 1.2), int(render.width / 1.2)),
+    #         interpolation=transforms.InterpolationMode.BILINEAR
+    #     )
+
     for fname in os.listdir(renders_dir):
         render = Image.open(renders_dir / fname)
         gt = Image.open(gt_dir / fname)
+        resize_transform = transforms.Resize(
+            (int(render.height / 1.2), int(render.width / 1.2)),
+            interpolation=transforms.InterpolationMode.BILINEAR
+        )
+        if True:
+            render = resize_transform(render)
+            gt = resize_transform(gt)
+
+
         renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].cuda())
         gts.append(tf.to_tensor(gt).unsqueeze(0)[:, :3, :, :].cuda())
         image_names.append(fname)
@@ -44,7 +60,7 @@ def evaluate(model_paths, mode):
     full_dict_polytopeonly = {}
     per_view_dict_polytopeonly = {}
     print("")
-
+    txt_path = './metrix.txt'
     for scene_dir in model_paths:
         # try:
         print("Scene:", scene_dir)
@@ -56,6 +72,8 @@ def evaluate(model_paths, mode):
         test_dir = Path(scene_dir) / mode
 
         for method in os.listdir(test_dir):
+            # method = "ours_"
+            method = "ours_199993"
             print("Method:", method)
 
             full_dict[scene_dir][method] = {}
@@ -78,6 +96,11 @@ def evaluate(model_paths, mode):
                 ssims.append(ssim(renders[idx], gts[idx]))
                 psnrs.append(psnr(renders[idx], gts[idx]))
                 lpipss.append(lpips(renders[idx], gts[idx], net_type="vgg"))
+                with open(txt_path, "a") as f:
+                    f.write(
+                        f"ssim:{float(ssims[idx])},psnr:{float(psnrs[idx])},lpips:{float(lpipss[idx])}img:"+image_names[idx]+"\n"
+                    )
+                
 
             print("  SSIM : {:>12.7f}".format(torch.tensor(ssims).mean(), ".5"))
             print("  PSNR : {:>12.7f}".format(torch.tensor(psnrs).mean(), ".5"))

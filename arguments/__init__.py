@@ -65,8 +65,8 @@ class AuxiliaryParams(ParamGroup):
     def __init__(self, parser, sentinel=False):
         self.debug_from = -1
         self.detect_anomaly = False
-        self.test_iterations = [step for step in range(5000, 105000, 5000)]
-        self.save_iterations = [100_000]
+        self.test_iterations = [50_000, 100_000, 150_000, 200_000]
+        self.save_iterations = [100_000, 150_000, 200_000]
         self.quiet = False
         self.checkpoint_iterations = []
         self.start_checkpoint = ""
@@ -287,7 +287,7 @@ class BenchmarkParams(ParamGroup):
         self.enable_timer = False  # Log running time from python side.
         self.end2end_time = True  # Log end2end training time.
         self.zhx_time = False  # Log running time from gpu side.
-        self.check_gpu_memory = False  # check gpu memory usage.
+        self.check_gpu_memory = True  # check gpu memory usage.
         self.check_cpu_memory = False  # check cpu memory usage.
         self.log_memory_summary = False
 

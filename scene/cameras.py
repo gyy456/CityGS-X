@@ -85,11 +85,21 @@ class Camera(nn.Module):
             or (not args.distributed_dataset_storage)
         ):
             # load to cpu
-            self.original_image_backup = image.contiguous()
+            if image is not None:
+                self.original_image_backup = image.contiguous()
             if args.preload_dataset_to_gpu:
                 self.original_image_backup = self.original_image_backup.to("cuda")
-            self.image_width = self.original_image_backup.shape[2]
-            self.image_height = self.original_image_backup.shape[1]
+            self.image_width = image_width
+            self.image_height = image_height
+            if resized_image_gray is not None:
+                self.image_gray_backup = resized_image_gray.clamp(0.0, 1.0).contiguous()
+            if invdepthmaps is not None:
+                self.invdepthmap_backup = invdepthmaps.contiguous()
+            # if depth_mask is not None:
+            #     self.depth_mask = depth_mask.contiguous()
+            #     if invdepthmaps is not None and depth_mask is not None:
+            #         # Use depth_mask to set invdepthmaps to 0 where mask is 0
+                    # self.invdepthmap_backup[self.depth_mask.unsqueeze(0) == 0] = 0
         else:
             self.original_image_backup = None
             self.image_height, self.image_width = utils.get_img_size()
@@ -122,14 +132,14 @@ class Camera(nn.Module):
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
         # if depth is None:
-        self.invdepthmap  = None
+        # self.invdepthmap  = None
         depth_path = self.image_path.replace('images','depths')
         depth_path = depth_path.replace('jpg','png')
         # if os.path.exists(depth_path):
         #     invdepthmap = cv2.imread(depth_path, -1).astype(np.float32) / float(2**16)
         #     self.invdepthmap = cv2.resize(invdepthmap, self.resolution)
         #     self.invdepthmap[self.invdepthmap < 0] = 0
-        self.depth_reliable = depth_reliables
+        self.depth_reliable = True
             # if depth_params is not None:
             #     if depth_params["scale"] < 0.2 * depth_params["med_scale"] or depth_params["scale"] > 5 * depth_params["med_scale"]:
             #         self.depth_reliable = False
@@ -139,15 +149,15 @@ class Camera(nn.Module):
             #         self.invdepthmap = self.invdepthmap * depth_params["scale"] + depth_params["offset"]  #统一尺度
             # if self.invdepthmap.ndim != 2:
             #     self.invdepthmap = self.invdepthmap[..., 0]
-        self.invdepthmap = invdepthmaps
+        # self.invdepthmap = invdepthmaps
         # if args.preload_dataset_to_gpu and depth_reliables is not None:
         #     self.invdepthmap = self.invdepthmap.to("cuda")
         self.normal_mask = normal_mask
         self.noraml_gt = noraml_gt
-        self.depth_mask = depth_mask
+        # self.depth_mask = depth_mask
         self.ncc_scale = 1
-        if resized_image_gray is not None:
-            self.image_gray = resized_image_gray.clamp(0.0, 1.0)
+        # self.image_gray = None
+
     def get_camera2world(self):
         return self.world_view_transform_backup.t().inverse()
     def get_calib_matrix_nerf(self, scale=1.0):

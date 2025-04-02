@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -N 1 -n 6 --gres=gpu:1 -p gvlab -A gvlab
+#SBATCH -N 1 -n 24 --gres=gpu:4 -p gvlab -A gvlab
 
 module load anaconda/2022.10
 module load cuda/11.8
@@ -8,10 +8,11 @@ echo 111
 source activate grendel-gyy 
 echo 222
 
-# torchrun --standalone --nnodes=1 --nproc-per-node=4  train.py --bsz 4 -s datasets/rubble --resolution 4    --model_path output/rubble_w_geo_normal --iterations 100000 --images train/rgbs \
-    # --single_view_weight_from_iter 10000 --scale_loss_from_iter 0 --depth_l1_weight_final 0.01 --dpt_loss_from_iter 10000
-
-
+torchrun --standalone --nnodes=1 --nproc-per-node=4  train.py --bsz 4 -s datasets/New_MarixCity/small_city/aerial/train/block_all --resolution 1 --model_path output/Matrix_colmap_add_dpt --iterations 200000  \
+    --single_view_weight_from_iter 50000 --scale_loss_from_iter 0 --depth_l1_weight_final 0.01 --depth_l1_weight_init 1 --dpt_loss_from_iter 50000 --multi_view_weight_from_iter 100000 \
+    --multi_view_max_angle  30 --multi_view_min_dis  0.01 --multi_view_max_dis  25
+        # --self.multi_view_min_dis  0.01
+        # --self.multi_view_max_dis  1.5
 # torchrun --standalone --nnodes=1 --nproc-per-node=4 train.py --bsz 4 -s /ailab/user/gaoyuanyuan_p/datasets/sci_art --resolution 4    --model_path output/sci_art_shuffle --iterations 100000 --images train/rgbsca
 # python  multi_view_precess.py    -s datasets/sci_art --resolution 4    --model_path datasets/sci_art/mask_2 --iterations 100000 --images train/rgbs  
 # python utils/make_depth_scale.py --base_dir datasets/sci_art/ --depths_dir datasets/sci_art/train/depths/
@@ -19,8 +20,8 @@ echo 222
 # torchrun --standalone --nnodes=1 --nproc-per-node=4  train.py --bsz 4 -s huace_street --resolution 2    --model_path output/huace_street --iterations 100000
 
 
-python  train.py --bsz 1 -s datasets/rubble --resolution 4 --model_path output/rubble_1gpu_1bsz    --iterations 100000 --images train/rgbs \
-    --single_view_weight_from_iter 10000 --scale_loss_from_iter 0 --depth_l1_weight_final 0.01 --depth_l1_weight_init  --dpt_loss_from_iter 10000 --multi_view_weight_from_iter 100000
+# python  train.py --bsz 1 -s datasets/rubble --resolution 4 --model_path output/rubble_1gpu_1bsz    --iterations 100000 --images train/rgbs \
+#     --single_view_weight_from_iter 10000 --scale_loss_from_iter 0 --depth_l1_weight_final 0.01 --depth_l1_weight_init  --dpt_loss_from_iter 10000 --multi_view_weight_from_iter 100000
 
 
 # torchrun --standalone --nnodes=1 --nproc-per-node=4  render_mesh.py -s datasets/rubble --model_path  output/rubble_w_geo  --skip_test  --bsz 4  --images train/rgbs\
