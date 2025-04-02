@@ -1,9 +1,21 @@
-# Offical Implementation of **CityGS-X**
+<div align="center">
+<h1>Offical Implementation of CityGS-𝒳</h1>
+
+<a href="https://arxiv.org/abs/2503.23044" target="_blank" rel="noopener noreferrer">
+  <img src="https://img.shields.io/badge/Paper-VGGT" alt="Paper PDF">
+</a>
+<a href="https://arxiv.org/abs/2503.23044"><img src="https://img.shields.io/badge/arXiv-2503.11651-b31b1b" alt="arXiv"></a>
+<a href="https://lifuguan.github.io/CityGS-X/"><img src="https://img.shields.io/badge/Project_Page-green" alt="Project Page"></a>
+
+
+**Northwestern Polytechnical University**; **Shanghai AI Lab**
+
 | CityGS-X : A Scalable Architecture for Efficient and Geometrically Accurate Large-Scale Scene Reconstruction
 
-[**Webpage**](https://lifuguan.github.io/CityGS-X/) | [**Full Paper**](https://arxiv.org/abs/2503.23044) <br>
 
 [Yuanyuan Gao*](https://scholar.google.com/citations?hl=en&user=1zDq0q8AAAAJ), [Hao Li*](https://lifuguan.github.io/), Jiaqi Chen*, Zhengyu Zou, [Zhihang Zhong†](https://zzh-tech.github.io), [Dingwen Zhang†](https://vision-intelligence.com.cn), [Xiao Sun](https://jimmysuen.github.io), Junwei Han<br>(\* indicates equal contribution, † means Co-corresponding author)<br>
+
+</div>
 
 ![Teaser image](assets/cityx_tease.jpg)
 
