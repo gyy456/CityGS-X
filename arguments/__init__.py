@@ -66,7 +66,7 @@ class AuxiliaryParams(ParamGroup):
         self.debug_from = -1
         self.detect_anomaly = False
         self.test_iterations = [50_000, 100_000, 150_000, 200_000]
-        self.save_iterations = [100_000, 150_000, 200_000]
+        self.save_iterations = [1_000, 150_000, 200_000]
         self.quiet = False
         self.checkpoint_iterations = []
         self.start_checkpoint = ""
@@ -74,7 +74,7 @@ class AuxiliaryParams(ParamGroup):
         self.log_folder = "/tmp/gaussian_splatting"
         self.log_interval = 250
         self.llffhold = 83
-        self.backend = "default" # "default", "gsplat"
+        self.backend = "default" # "default"
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -236,7 +236,8 @@ class OptimizationParams(ParamGroup):
         self.multi_view_geo_weight = 0.03
         self.multi_view_ncc_weight = 0.15
         self.wo_use_geo_occ_aware = False
-        # self.load_depth = True
+        self.default_voxel_size = 0.0001
+
         super().__init__(parser, "Optimization Parameters")
 
 
@@ -254,8 +255,8 @@ class DistributionParams(ParamGroup):
         # Distribution for 3DGS-wise workloads.
         self.gaussians_distribution = True
         self.redistribute_gaussians_mode = "random_redistribute"  # "no_redistribute"
-        self.redistribute_gaussians_frequency = (
-            10 # redistribution frequency for 3DGS storage location.
+        self.redistribute_anchors_frequency = (
+            10 # redistribution frequency for anchors.
         )
         self.redistribute_gaussians_threshold = (
             1.1  # threshold to apply redistribution for 3DGS storage location
@@ -266,7 +267,7 @@ class DistributionParams(ParamGroup):
         # Dataset and Model save
         self.bsz = 1  # batch size.
         self.distributed_dataset_storage = True  # if True, we store dataset only on rank 0 and broadcast to other ranks.
-        self.distributed_save = True
+        self.distributed_save = False
         self.local_sampling = False
         self.preload_dataset_to_gpu = (
             False  # By default, we do not preload dataset to GPU.
@@ -287,7 +288,7 @@ class BenchmarkParams(ParamGroup):
         self.enable_timer = False  # Log running time from python side.
         self.end2end_time = True  # Log end2end training time.
         self.zhx_time = False  # Log running time from gpu side.
-        self.check_gpu_memory = True  # check gpu memory usage.
+        self.check_gpu_memory = False  # check gpu memory usage.
         self.check_cpu_memory = False  # check cpu memory usage.
         self.log_memory_summary = False
 

@@ -92,9 +92,17 @@ class Camera(nn.Module):
             self.image_width = image_width
             self.image_height = image_height
             if resized_image_gray is not None:
-                self.image_gray_backup = resized_image_gray.clamp(0.0, 1.0).contiguous()
+                if not args.distributed_dataset_storage:
+                    self.image_gray = resized_image_gray.contiguous()
+                else:
+                    self.image_gray_backup = resized_image_gray.clamp(0.0, 1.0).contiguous()
             if invdepthmaps is not None:
-                self.invdepthmap_backup = invdepthmaps.contiguous()
+                if not args.distributed_dataset_storage:
+                    self.invdepthmap = invdepthmaps.contiguous()
+                    self.invdepthmap_backup = None
+                else:
+                    self.invdepthmap_backup = invdepthmaps.contiguous()
+                    self.invdepthmap = None
             # if depth_mask is not None:
             #     self.depth_mask = depth_mask.contiguous()
             #     if invdepthmaps is not None and depth_mask is not None:

@@ -39,18 +39,32 @@ if __name__ == "__main__":
     dist_p = DistributionParams(parser)
     bench_p = BenchmarkParams(parser)
     debug_p = DebugParams(parser)
+    parser.add_argument('--not_use_dpt_loss', action='store_true', help='Do not use DPT loss')
+    parser.add_argument('--not_use_single_view_loss', action='store_true', help='Do not use single view loss')
+    parser.add_argument('--not_use_multi_view_loss', action='store_true', help='Do not use multi view loss')
     args = parser.parse_args(sys.argv[1:])
 
     # Set up distributed training
+
+
+    if args.not_use_dpt_loss:
+        args.dpt_loss_from_iter = args.iterations
+        assert args.dpt_loss_from_iter >= args.iterations
+    if args.not_use_multi_view_loss:
+        args.multi_view_weight_from_iter = args.iterations
+        assert args.multi_view_weight_from_iter >= args.iterations
+    if args.not_use_single_view_loss:
+        args.single_view_weight_from_iter = args.iterations
+        assert args.single_view_weight_from_iter >= args.iterations
 
     rank = int(os.environ.get("LOCAL_RANK", 0))
     
     # 在调用分布式初始化之前初始化调试器
     # port = 5690 + rank  # 每个进程使用不同的端口
-    # # if rank==0:
-    # debugpy.listen(('0.0.0.0', port))  # 启动调试器并监听不同的端口
-    # print(f"Process {rank} waiting for debugger to attach on port {port}...")
-    # debugpy.wait_for_client()  # 程序在这里暂停，直到调试器连接
+    # if rank==0:
+    #     debugpy.listen(('0.0.0.0', port))  # 启动调试器并监听不同的端口
+    #     print(f"Process {rank} waiting for debugger to attach on port {port}...")
+    #     debugpy.wait_for_client()  # 程序在这里暂停，直到调试器连接
     init_distributed(args)
 
     ## Prepare arguments.

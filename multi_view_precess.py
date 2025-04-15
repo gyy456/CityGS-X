@@ -77,7 +77,10 @@ def process(dataset_args, opt_args, pipe_args, args, log_file):
 
     depths_tsdf_fusion = []
     for camera in train_dataset:
-        depths_tsdf_fusion.append(1/camera.invdepthmap_backup.squeeze())
+        if camera.invdepthmap_backup != None:
+            depths_tsdf_fusion.append(1/camera.invdepthmap_backup.squeeze())
+        else:
+            depths_tsdf_fusion.append(1/camera.invdepthmap.squeeze())
     depths_tsdf_fusion_1 = torch.stack(depths_tsdf_fusion)
     for idx, view in enumerate(tqdm(train_dataset, desc = "preprocess")):
         ref_depth = depths_tsdf_fusion[idx].cuda()
@@ -126,7 +129,7 @@ def process(dataset_args, opt_args, pipe_args, args, log_file):
                         [pts_in_view_cam[...,0] * view.Fx / pts_in_view_cam[...,2] + view.Cx,
                         pts_in_view_cam[...,1] * view.Fy / pts_in_view_cam[...,2] + view.Cy], -1).float()
             pixel_noise = torch.norm(pts_projections.reshape(num_n, H, W, 2) - pixels[None], dim=-1)
-            d_mask_all = d_mask.reshape(num_n,H,W) & (pixel_noise < 5.0) & (pts_in_view_cam[...,2].reshape(num_n,H,W) > 0.0)
+            d_mask_all = d_mask.reshape(num_n,H,W) & (pixel_noise < args.pixel_thred) & (pts_in_view_cam[...,2].reshape(num_n,H,W) > 0.0)
             d_mask_all = (d_mask_all.sum(0) > 1)   
             ref_depth = ref_depth.detach().cpu().numpy()
             depth_i = (ref_depth - ref_depth.min()) / (ref_depth.max() - ref_depth.min() + 1e-20)
@@ -135,7 +138,7 @@ def process(dataset_args, opt_args, pipe_args, args, log_file):
             depth_i = (depth_i * 255).clip(0, 255).astype(np.uint8)
             depth_color = cv2.applyColorMap(depth_i, cv2.COLORMAP_JET)
             d_mask_all = d_mask_all.cpu().numpy()
-            # depth_color[~d_mask_all] = 0 
+            depth_color[~d_mask_all] = 0 
             # torchvision.utils.save_image(
             #     torch.tensor(depth_color).permute(2,0,1)/255.0,
             #     os.path.join(depths_path, gt_camera.image_name + ".png"),
@@ -161,6 +164,10 @@ if __name__ == "__main__":
     dist_p = DistributionParams(parser)
     bench_p = BenchmarkParams(parser)
     debug_p = DebugParams(parser)
+    parser.add_argument('--not_use_dpt_loss', action='store_true', help='Do not use DPT loss')
+    parser.add_argument('--not_use_single_view_loss', action='store_true', help='Do not use single view loss')
+    parser.add_argument('--not_use_multi_view_loss', action='store_true', help='Do not use multi view loss')      
+    parser.add_argument('--pixel_thred', type=float, default=1, help='pixel thred')
     args = parser.parse_args(sys.argv[1:])
 
     # Set up distributed training

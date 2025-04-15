@@ -34,6 +34,7 @@ class Scene:
         self.loaded_iter = None
         self.gaussians = gaussians
         log_file = utils.get_log_file()
+        
 
         if load_iteration:
             if load_iteration == -1:

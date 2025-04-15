@@ -2522,9 +2522,6 @@ def load_gray_image_from_cpu_to_all_gpu(batched_cameras, batched_strategies, gpu
                 .image_gray_backup
                 .cuda()
             )
-
-
-
             coverage_min_max_y[camera_id_in_batch] = (coverage_min_y, coverage_max_y)
         return coverage_min_max_y
 
@@ -2990,7 +2987,7 @@ def batched_loss_computation(
             )
             coverage_min_y, coverage_max_y = get_coverage_y_min_max(tile_ids_l, tile_ids_r)
 
-            if iterations > opt.single_view_weight_from_iter:
+            if iterations > opt.single_view_weight_from_iter: 
                 weight = opt.single_view_weight
                 normal = render_pkg["rendered_normal"]
                 depth_normal = render_pkg["depth_normal"]
@@ -3070,11 +3067,11 @@ def batched_loss_computation(
                 #     ncc_weight = (iterations-opt.multi_view_weight_from_iter) / (opt.multi_view_weight_from_iter*2-opt.multi_view_weight_from_iter) * 0.2
                 #     geo_weight = (iterations-opt.multi_view_weight_from_iter) / (opt.multi_view_weight_from_iter*2-opt.multi_view_weight_from_iter) * 0.05
                 # else:
-                ncc_weight = 0.2
-                geo_weight = 0.05
+                #     ncc_weight = 0.2
+                #     geo_weight = 0.05
                 pixel_noise_th = opt.multi_view_pixel_noise_th
                 # # total_patch_size = (patch_size * 2 + 1) ** 2
-                # ncc_weight = opt.multi_view_ncc_weight
+                ncc_weight = opt.multi_view_ncc_weight
                 # geo_weight = opt.multi_view_geo_weight
                 ## compute geometry consistency mask and loss
                 H, W = render_pkg['plane_depth'].squeeze().shape
@@ -3121,9 +3118,9 @@ def batched_loss_computation(
                     with torch.no_grad():
                         ## sample mask
                         if iterations < opt.multi_view_weight_from_iter * 1.2:
-                            patch_size, sample_num, scale, pixel_noise_th = 7, 10240, 4, 1.0
+                            patch_size, sample_num, scale, pixel_noise_th = 3, 10240, 4, 1.0
                         elif iterations < opt.multi_view_weight_from_iter * 1.5:
-                            patch_size, sample_num, scale, pixel_noise_th = 5, 20480, 4, 1.0
+                            patch_size, sample_num, scale, pixel_noise_th = 3, 10240, 4, 1.0
                         elif iterations < opt.multi_view_weight_from_iter * 2:
                             patch_size, sample_num, scale, pixel_noise_th = 3, 102400, 2, 1.0
                         else:
@@ -3191,8 +3188,7 @@ def batched_loss_computation(
                         if torch.isnan(ncc_loss) or not torch.isfinite(ncc_loss):
                                 ncc_loss = 0
                                 print(f'[fuck ncc_loss] {camera.image_name}')
-                        loss += ncc_loss
-                #     
+                        loss += ncc_loss 
                 # try:
             timers.stop("loss_computation")
 

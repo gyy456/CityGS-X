@@ -100,14 +100,18 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
             _normal_path = cam_info.image_path.replace('rgbs','normals')
             mask_path = cam_info.image_path.replace('rgbs','mask')
             mask_path = mask_path.replace('jpg','png')
-
             resolution = (round(orig_w/(args.resolution)), round(orig_h/(args.resolution)))
-            image = Image.open(cam_info.image_path)
-            resized_image_gray = image .convert('L')
-            resized_image_gray = PILtoTorch_1(resized_image_gray, resolution)
-            image.close()
-            image = None
-            if os.path.exists(depth_path):
+
+            if ~args.not_use_multi_view_loss:
+                image = Image.open(cam_info.image_path)
+                resized_image_gray = image .convert('L')
+                resized_image_gray = PILtoTorch_1(resized_image_gray, resolution)
+                image.close()
+                image = None
+            else:
+                resized_image_gray = None
+
+            if os.path.exists(depth_path) and  ~args.not_use_dpt_loss:
                 invdepthmap = cv2.imread(depth_path, -1).astype(np.float32) / float(2**16)
                 invdepthmap = cv2.resize(invdepthmap, resolution)
                 invdepthmap[invdepthmap < 0] = 0
@@ -127,6 +131,14 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
             else:
                 depth_reliable = None
                 invdepthmap = None
+            if os.path.exists(mask_path) and ~args.not_use_dpt_loss:
+                mask_color = cv2.imread(mask_path, -1).astype(np.float32) 
+                # mask = mask != 0
+                mask = np.any(mask_color != [0, 0, 0], axis=-1)
+                mask = torch.from_numpy(mask)
+                invdepthmap[mask.unsqueeze(0)==0] = 0
+            else:
+                mask = None
 
             if os.path.exists(_normal_path):
                 # _normal = Image.open(_normal_path)
@@ -141,15 +153,7 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
                 # noraml_gt= _normal/ normal_norm
                 normal_gt = None
                 normal_mask = None
-            if os.path.exists(mask_path):
-                mask_color = cv2.imread(mask_path, -1).astype(np.float32) 
-                # mask = mask != 0
-                mask = np.any(mask_color != [0, 0, 0], axis=-1)
-                mask = torch.from_numpy(mask)
-                invdepthmap[mask.unsqueeze(0)==0] = 0
-                
-            else:
-                mask = None
+
     else:
         gt_image = None
         loaded_mask = None
@@ -162,70 +166,6 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
 
 
     if return_image:
-        # # depth_path = cam_info.image_path.replace('rgbs','depths')
-        # if "MatrixCity" in cam_info.image_path:
-        #     depth_path = cam_info.image_path.replace("train/", "train/depths/", 1)
-        # else:
-        #     depth_path = cam_info.image_path.replace('rgbs','depths')
-        # depth_path = depth_path.replace('jpg','png')
-        # _normal_path = cam_info.image_path.replace('rgbs','normals')
-        # mask_path = cam_info.image_path.replace('rgbs','mask_2')
-        # mask_path = mask_path.replace('jpg','png')
-
-        # resolution = (round(orig_w/(args.resolution)), round(orig_h/(args.resolution)))
-        # image = Image.open(cam_info.image_path)
-        # resized_image_gray = image .convert('L')
-        # resized_image_gray = PILtoTorch_1(resized_image_gray, resolution)
-
-
-
-        # if os.path.exists(depth_path):
-        #     invdepthmap = cv2.imread(depth_path, -1).astype(np.float32) / float(2**16)
-        #     invdepthmap = cv2.resize(invdepthmap, resolution)
-        #     invdepthmap[invdepthmap < 0] = 0
-        #     depth_reliable = True
-        #     depth_params = cam_info.depth_params
-        #     if depth_params is not None:
-        #         # if depth_params["scale"] < 0.2 * depth_params["med_scale"] or depth_params["scale"] > 5 * depth_params["med_scale"]:
-        #         #     utils.print_rank_0("cam_info.image_name")
-        #         # else:
-        #         #     utils.print_rank_0("False")
-        #         #     # self.depth_mask *= 0
-        #         if depth_params["scale"] > 0:
-        #             invdepthmap = invdepthmap * depth_params["scale"] + depth_params["offset"]  #统一尺度
-        #     if invdepthmap.ndim != 2:
-        #         invdepthmap = invdepthmap[..., 0]
-        #     invdepthmap = torch.from_numpy(invdepthmap[None])
-        # else:
-        #     depth_reliable = None
-        #     invdepthmap = None
-
-        # if os.path.exists(_normal_path):
-        #     # _normal = Image.open(_normal_path)
-        #     # resized_normal = PILtoTorch_1(_normal, resolution)
-        #     # resized_normal = resized_normal[:3]
-        #     # _normal = - (resized_normal * 2 - 1)
-        #     # # normalize normal
-        #     # _normal = _normal.permute(1, 2, 0) @ (torch.tensor(np.linalg.inv(cam_info.R)).float())
-        #     # _normal = _normal.permute(2, 0, 1)
-        #     # normal_norm = torch.norm(_normal, dim=0, keepdim=True)
-        #     # normal_mask = ~((normal_norm > 1.1) | (normal_norm < 0.9))
-        #     # noraml_gt= _normal/ normal_norm
-        #     normal_gt = None
-        #     normal_mask = None
-        # if os.path.exists(mask_path):
-        #     mask_color = cv2.imread(mask_path, -1).astype(np.float32) 
-        #     # mask = mask != 0
-        #     mask = np.any(mask_color != [0, 0, 0], axis=-1)
-
-
-        #     mask = torch.from_numpy(mask)
-        #     # invdepthmap[mask.unsqueeze(0)] = 0
-        # else:
-        #     mask = None
-
-        # invdepthmap[mask.unsqueeze(0)] = 0
-        # mask = None
 
         return gt_image, depth_reliable, invdepthmap, mask, noraml_gt, normal_mask, resized_image_gray
 
@@ -471,6 +411,10 @@ def cameraList_from_camInfos(cam_infos, args):
             noramls_gt = [None for _ in cam_infos]
             depth_masks = [None for _ in cam_infos]
             resized_image_gray = [None for _ in cam_infos]
+    elif utils.DEFAULT_GROUP.size() > 1 and args.multiprocesses_image_loading and not args.distributed_dataset_storage: #load all on evry porcess
+        decompressed_images, depth_reliables, invdepthmaps,  depth_masks, noramls_gt, normal_masks, resized_image_gray = decompressed_images_from_camInfos_multiprocess(
+                cam_infos, args
+            )
         # decompressed_images = decompressed_images_from_camInfos_multiprocess_sharedmem(cam_infos, resolution_scale, args)
     else:
         decompressed_images, depth_reliables, invdepthmaps,  depth_masks, noramls_gt, normal_masks, resized_image_gray = decompressed_images_from_camInfos_multiprocess_single_gpu(

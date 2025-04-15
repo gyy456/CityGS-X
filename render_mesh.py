@@ -16,8 +16,6 @@ import os
 from tqdm import tqdm
 from os import makedirs
 from gaussian_renderer import (
-    # preprocess3dgs_and_all2all,
-    # render
     distributed_preprocess3dgs_and_all2all_final,
     render_final,
 )
@@ -408,12 +406,15 @@ if __name__ == "__main__":
     parser.add_argument("--skip_test", action="store_true")
     parser.add_argument("--generate_num", default=-1, type=int)
     parser.add_argument("--sample_freq", default=-1, type=int)
-    parser.add_argument("--distributed_load", action="store_true")  # TODO: delete this.
+    parser.add_argument("--distributed_load", action="store_true")  
     parser.add_argument("--l", default=-1, type=int)
     parser.add_argument("--r", default=-1, type=int)
     parser.add_argument("--max_depth", default=5, type=float)
     parser.add_argument("--voxel_size", default=0.002, type=float)
     parser.add_argument("--use_depth_filter", action="store_true")
+    parser.add_argument('--not_use_dpt_loss', action='store_false', help='Do not use DPT loss')
+    parser.add_argument('--not_use_single_view_loss', action='store_false', help='Do not use single view loss')
+    parser.add_argument('--not_use_multi_view_loss', action='store_false', help='Do not use multi view loss')      
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 

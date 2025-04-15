@@ -85,12 +85,15 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, depths_para
     args = utils.get_args()
     cam_infos = []
     utils.print_rank_0("Loading cameras from disk...")
+    # idx = 0
     for idx, key in tqdm(
         enumerate(cam_extrinsics),
         total=len(cam_extrinsics),
         disable=(utils.LOCAL_RANK != 0),
     ):
-
+        # idx = idx + 1
+        # if idx == 11:
+        #     break 
         extr = cam_extrinsics[key]
         intr = cam_intrinsics[extr.camera_id]
         height = intr.height
@@ -349,7 +352,6 @@ def readColmapSceneInfo(path, images, eval, llffhold=97):
         # test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
         train_cam_infos = [c for idx, c in enumerate(cam_infos) if not os.path.exists(c.image_path.replace('train/', 'val/'))]
         test_cam_infos  = [c for idx, c in enumerate(cam_infos) if os.path.exists(c.image_path.replace('train/', 'val/'))]
-
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 

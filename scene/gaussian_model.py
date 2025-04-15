@@ -414,8 +414,11 @@ class GaussianModel:
         box_min = torch.min(points)*self.extend
         box_max = torch.max(points)*self.extend
         box_d = box_max - box_min
+
+        args = utils.get_args()
+
         if self.base_layer < 0:
-            default_voxel_size = 0.001
+            default_voxel_size = args.default_voxel_size
             self.base_layer = torch.round(torch.log2(box_d/default_voxel_size)).int().item()-(self.levels//2)+1
         self.voxel_size = box_d/(float(self.fork) ** self.base_layer)
         self.init_pos = torch.tensor([box_min, box_min, box_min]).float().cuda()
@@ -475,25 +478,25 @@ class GaussianModel:
             mask = random_idx % shard_world_size == the_idx
             index = random_idx[mask]
 
-            # anchor_ind_l, anchor_ind_r = utils.get_local_chunk_l_r(
-            #     anchor.shape[0], shard_world_size, shard_rank
-            # )
-            # anchor = anchor[anchor_ind_l:anchor_ind_r].contiguous()
-            # offsets = offsets[anchor_ind_l:anchor_ind_r].contiguous()
-            # anchors_feat = anchors_feat[anchor_ind_l:anchor_ind_r].contiguous()
-            # scales = scales[anchor_ind_l:anchor_ind_r].contiguous()
-            # rots = rots[anchor_ind_l:anchor_ind_r].contiguous()
-            # opacities = opacities[anchor_ind_l:anchor_ind_r].contiguous()
-            # self._level = self._level[anchor_ind_l:anchor_ind_r].contiguous()
+            anchor_ind_l, anchor_ind_r = utils.get_local_chunk_l_r(
+                anchor.shape[0], shard_world_size, shard_rank
+            )
+            anchor = anchor[anchor_ind_l:anchor_ind_r].contiguous()
+            offsets = offsets[anchor_ind_l:anchor_ind_r].contiguous()
+            anchors_feat = anchors_feat[anchor_ind_l:anchor_ind_r].contiguous()
+            scales = scales[anchor_ind_l:anchor_ind_r].contiguous()
+            rots = rots[anchor_ind_l:anchor_ind_r].contiguous()
+            opacities = opacities[anchor_ind_l:anchor_ind_r].contiguous()
+            self._level = self._level[anchor_ind_l:anchor_ind_r].contiguous()
 
 
-            anchor = anchor[index].contiguous()
-            offsets = offsets[index].contiguous()
-            anchors_feat = anchors_feat[index].contiguous()
-            scales = scales[index].contiguous()
-            rots = rots[index].contiguous()
-            opacities = opacities[index].contiguous()
-            self._level = self._level[index].contiguous()
+            # anchor = anchor[index].contiguous()
+            # offsets = offsets[index].contiguous()
+            # anchors_feat = anchors_feat[index].contiguous()
+            # scales = scales[index].contiguous()
+            # rots = rots[index].contiguous()
+            # opacities = opacities[index].contiguous()
+            # self._level = self._level[index].contiguous()
 
 
 
@@ -749,17 +752,18 @@ class GaussianModel:
                 # concatenate gathered tensors
 
                 return (
-                    gathered_tensors if group.rank() == 0 else None
+                    gathered_tensors if group.rank() == 0 else tensor
                 )  # only return gather tensors at rank 0
-
+            
             anchor = gather_uneven_tensors(self._anchor).detach().cpu().numpy()
-            anchor_feat = gather_uneven_tensors(self._anchor_feat).detach().cpu().numpy()
+            anchor_feats = gather_uneven_tensors(self._anchor_feat).detach().cpu().numpy()
             offsets = gather_uneven_tensors(self._offset)
             offsets = offsets.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-            opacity = gather_uneven_tensors(self._opacity).detach().cpu().numpy()
-            scaling = gather_uneven_tensors(self._scaling).detach().cpu().numpy()
-            rotation = gather_uneven_tensors(self._rotation).detach().cpu().numpy()
-            levels = gather_uneven_tensors(self._levels).detach().cpu().numpy()
+            opacities = gather_uneven_tensors(self._opacity).detach().cpu().numpy()
+            scales = gather_uneven_tensors(self._scaling).detach().cpu().numpy()
+            rots = gather_uneven_tensors(self._rotation).detach().cpu().numpy()
+            levels = gather_uneven_tensors(self._level).detach().cpu().numpy()
+            extra_levels = gather_uneven_tensors(self._extra_level).unsqueeze(dim=1).detach().cpu().numpy()
             infos = np.zeros_like(levels, dtype=np.float32)
             infos[0, 0] = self.voxel_size
             infos[1, 0] = self.standard_dist
@@ -830,7 +834,7 @@ class GaussianModel:
         np.savez(os.path.join(os.path.dirname(path), 'additional_attributes.npz'),init_pos=self.init_pos.detach().cpu())
 
         # remark: max_radii2D, xyz_gradient_accum and denom are not saved here; they are save elsewhere.
-    def save_mlp_checkpoints(self, path, mode = 'split'):#split or unite
+    def save_mlp_checkpoints(self, path):#split or unite
         # mkdir_p(os.path.dirname(path))
         # if path.endswith(".ply"):
         #         path = (
@@ -841,7 +845,10 @@ class GaussianModel:
         #             + str(utils.WORLD_SIZE)
         #             + ".ply"
         #         )
-        if mode == 'split':
+        args = utils.get_args()
+        utils.log_cpu_memory_usage("start save_ply")
+        group = utils.DEFAULT_GROUP
+        if  args.distributed_save:
             self.eval()
             opacity_mlp = torch.jit.trace(self.mlp_opacity, (torch.rand(1, self.feat_dim+self.view_dim+self.opacity_dist_dim+self.level_dim).cuda()))
             opacity_mlp.save(os.path.join(path, "_rk"
@@ -861,7 +868,9 @@ class GaussianModel:
                 emd.save(os.path.join(path,  "_rk"
                     + str(utils.GLOBAL_RANK)+'embedding_appearance.pt'))
             self.train()
-        elif mode == 'unite':
+        else:
+            if group.rank() != 0:
+                return
             param_dict = {}
             param_dict['opacity_mlp'] = self.mlp_opacity.state_dict()
             param_dict['cov_mlp'] = self.mlp_cov.state_dict()
@@ -871,12 +880,13 @@ class GaussianModel:
             if self.appearance_dim > 0:
                 param_dict['appearance'] = self.embedding_appearance.state_dict()
             torch.save(param_dict, os.path.join(path, 'checkpoints.pth'))
-        else:
-            raise NotImplementedError
 
 
-    def load_mlp_checkpoints(self, path, mode = 'split'):#split or unite
-        if mode == 'split':
+    def load_mlp_checkpoints(self, path, mode = 'split'):
+        args = utils.get_args()
+        utils.log_cpu_memory_usage("start save_ply")
+        group = utils.DEFAULT_GROUP
+        if args.distributed_save:
             self.mlp_opacity = torch.jit.load(os.path.join(path, "_rk"
                     + str(utils.GLOBAL_RANK)+'opacity_mlp.pt')).cuda()
             self.mlp_cov = torch.jit.load(os.path.join(path,  "_rk"
@@ -889,7 +899,7 @@ class GaussianModel:
             if self.appearance_dim > 0:
                 self.embedding_appearance = torch.jit.load(os.path.join(path,  "_rk"
                     + str(utils.GLOBAL_RANK)+'embedding_appearance.pt')).cuda()
-        elif mode == 'unite':
+        else :
             checkpoint = torch.load(os.path.join(path, 'checkpoints.pth'))
             self.mlp_opacity.load_state_dict(checkpoint['opacity_mlp'])
             self.mlp_cov.load_state_dict(checkpoint['cov_mlp'])
@@ -898,8 +908,7 @@ class GaussianModel:
                 self.mlp_feature_bank.load_state_dict(checkpoint['feature_bank_mlp'])
             if self.appearance_dim > 0:
                 self.embedding_appearance.load_state_dict(checkpoint['appearance'])
-        else:
-            raise NotImplementedError
+
 
     def prune_based_on_opacity(self, min_opacity):
         prune_mask = (self.get_opacity < min_opacity).squeeze()
@@ -1465,17 +1474,6 @@ class GaussianModel:
             self.prune_anchor(prune_mask)
 
 
-    def gsplat_add_densification_stats(
-        self, viewspace_point_tensor_grad, update_filter, width, height, pixels
-    ):  # the :2] is a weird implementation. It is because viewspace_point_tensor is (N, 3) tensor.
-        grad = viewspace_point_tensor_grad  # (N, 2)
-        # Normalize the gradients to [-1, 1] screen size
-        grad[:, 0] *= width * 0.5
-        grad[:, 1] *= height * 0.5
-        self.xyz_gradient_accum[update_filter] += torch.norm(
-            grad[update_filter, :2], dim=-1, keepdim=True
-        ) * pixels[update_filter]
-        self.denom[update_filter] += pixels[update_filter]
 
     def group_for_redistribution(self):
         args = utils.get_args()
@@ -1666,18 +1664,18 @@ class GaussianModel:
         # norm p=0
         return torch.arange(self.get_anchor.shape[0], device="cuda") % world_size
 
-    def need_redistribute_gaussians(self, group):
+    def need_redistribute_anchors(self, group):
         args = utils.get_args()
         if group.size() == 1:
             return False
-        if utils.get_denfify_iter() == args.redistribute_gaussians_frequency:
+        if utils.get_denfify_iter() == args.redistribute_anchors_frequency:
             # do redistribution after the first densification.
             return True
-        local_n_3dgs = self.get_anchor.shape[0]
-        all_local_n_3dgs = [None for _ in range(group.size())]
-        torch.distributed.all_gather_object(all_local_n_3dgs, local_n_3dgs, group=group)
-        if min(all_local_n_3dgs) * args.redistribute_gaussians_threshold < max(
-            all_local_n_3dgs
+        local_n_anchors = self.get_anchor.shape[0]
+        all_local_n_anchors = [None for _ in range(group.size())]
+        torch.distributed.all_gather_object(all_local_n_anchors, local_n_anchors, group=group)
+        if min(all_local_n_anchors) * args.redistribute_gaussians_threshold < max(
+            all_local_n_anchors
         ):
             return True
         return False
@@ -1688,7 +1686,7 @@ class GaussianModel:
             return
 
         comm_group_for_redistribution = self.group_for_redistribution()
-        if not self.need_redistribute_gaussians(comm_group_for_redistribution):
+        if not self.need_redistribute_anchors(comm_group_for_redistribution):
             return
 
         # Get each anchors' destination GPU.

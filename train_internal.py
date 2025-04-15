@@ -5,8 +5,6 @@ from utils.loss_utils import l1_loss
 from gaussian_renderer import (
     distributed_preprocess3dgs_and_all2all_final,
     render_final,
-    gsplat_distributed_preprocess3dgs_and_all2all_final,
-    gsplat_render_final,
     prefilter_voxel,
 )
 from torch.cuda import nvtx
@@ -29,7 +27,7 @@ from utils.timer import Timer, End2endTimer
 from tqdm import tqdm
 from utils.image_utils import psnr
 import torch.distributed as dist
-from densification import densification, gsplat_densification
+from densification import densification
 import pdb
 import torchvision
 from os import makedirs
@@ -108,10 +106,8 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
 
     # Init background
     background = None
-    if args.backend == "gsplat":
-        bg_color = [1, 1, 1] if dataset_args.white_background else None
-    else:
-        bg_color = [1, 1, 1] if dataset_args.white_background else [0, 0, 0]
+
+    bg_color = [1, 1, 1] if dataset_args.white_background else [0, 0, 0]
 
     if bg_color is not None:
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -186,7 +182,7 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
                 batched_cameras, batched_strategies, gpuid2tasks
             )
 
-            if iteration >  opt_args.multi_view_weight_from_iter:
+            if iteration >  opt_args.multi_view_weight_from_iter and args.distributed_dataset_storage:
 
                 load_gray_image_from_cpu_to_all_gpu(
                     batched_cameras, batched_strategies, gpuid2tasks
@@ -194,7 +190,7 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
                 load_gray_image_from_cpu_to_all_gpu(
                     batched_nearest_cameras, batched_strategies, gpuid2tasks)
 
-            if iteration > opt_args.dpt_loss_from_iter:
+            if iteration > opt_args.dpt_loss_from_iter and args.distributed_dataset_storage:
                 load_depth_from_cpu_to_all_gpu(
                      batched_cameras, batched_strategies, gpuid2tasks
                 )
@@ -206,69 +202,50 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
             # )
             timers.stop("load_cameras")
         # pdb.set_trace()
-        if args.backend == "gsplat":
-            batched_screenspace_pkg = (
-                gsplat_distributed_preprocess3dgs_and_all2all_final(
-                    batched_cameras,
-                    gaussians,
-                    pipe_args,
-                    background,
-                    batched_strategies=batched_strategies,
-                    mode="train",
-                )
-            )
-            batched_image, batched_compute_locally = gsplat_render_final(
-                batched_screenspace_pkg, batched_strategies
-            )
-            batch_statistic_collector = [
-                cuda_args["stats_collector"]
-                for cuda_args in batched_screenspace_pkg["batched_cuda_args"]
-            ]
-        else:
-            batched_voxel_mask = [] 
-            # camera_t = []
-            # cams=[]
-            batched_nearest_voxel_mask = []
-            for camera in batched_cameras:
-                gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
-                voxel_visible_mask = prefilter_voxel(camera, gaussians, pipe_args, background)
-                batched_voxel_mask.append(voxel_visible_mask)
-                # camera_t.append(camera.camera_center/torch.norm(camera.camera_center))
-                # cams.append(camera)
-            if iteration >  opt_args.multi_view_weight_from_iter:
-                for camera in batched_nearest_cameras:
-                    if camera != None:
-                        gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
-                        voxel_visible_mask = prefilter_voxel(camera, gaussians, pipe_args, background)
-                        batched_nearest_voxel_mask.append(voxel_visible_mask)
-                    else:
-                        batched_nearest_voxel_mask.append(None)
-            else:
-                for camera in batched_nearest_cameras:
+        batched_voxel_mask = [] 
+        # camera_t = []
+        # cams=[]
+        batched_nearest_voxel_mask = []
+        for camera in batched_cameras:
+            gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
+            voxel_visible_mask = prefilter_voxel(camera, gaussians, pipe_args, background)
+            batched_voxel_mask.append(voxel_visible_mask)
+            # camera_t.append(camera.camera_center/torch.norm(camera.camera_center))
+            # cams.append(camera)
+        if iteration >  opt_args.multi_view_weight_from_iter:
+            for camera in batched_nearest_cameras:
+                if camera != None:
+                    gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
+                    voxel_visible_mask = prefilter_voxel(camera, gaussians, pipe_args, background)
+                    batched_nearest_voxel_mask.append(voxel_visible_mask)
+                else:
                     batched_nearest_voxel_mask.append(None)
-            retain_grad = (iteration < opt_args.update_until and iteration >= 0)
+        else:
+            for camera in batched_nearest_cameras:
+                batched_nearest_voxel_mask.append(None)
+        retain_grad = (iteration < opt_args.update_until and iteration >= 0)
 
-            batched_screenspace_pkg = distributed_preprocess3dgs_and_all2all_final(
-                batched_cameras,
-                gaussians,
-                pipe_args,
-                background,
-                batched_voxel_mask = batched_voxel_mask,
-                batched_nearest_cameras = batched_nearest_cameras,
-                batched_nearest_voxel_mask = batched_nearest_voxel_mask,
-                retain_grad=retain_grad,
-                batched_strategies=batched_strategies,
-                mode="train",
-                return_plane = iteration > opt_args.single_view_weight_from_iter,
-                iterations = iteration ,
-            )
-            batched_image, batched_compute_locally,  batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict, batched_return_dict_nearest = render_final(batched_cameras,
-                batched_screenspace_pkg, batched_strategies, gaussians, batched_cameras_nearest = batched_nearest_cameras
-            )
-            batch_statistic_collector = [
-                cuda_args["stats_collector"]
-                for cuda_args in batched_screenspace_pkg["batched_cuda_args"]
-            ]
+        batched_screenspace_pkg = distributed_preprocess3dgs_and_all2all_final(
+            batched_cameras,
+            gaussians,
+            pipe_args,
+            background,
+            batched_voxel_mask = batched_voxel_mask,
+            batched_nearest_cameras = batched_nearest_cameras,
+            batched_nearest_voxel_mask = batched_nearest_voxel_mask,
+            retain_grad=retain_grad,
+            batched_strategies=batched_strategies,
+            mode="train",
+            return_plane = iteration > opt_args.single_view_weight_from_iter,
+            iterations = iteration ,
+        )
+        batched_image, batched_compute_locally,  batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict, batched_return_dict_nearest = render_final(batched_cameras,
+            batched_screenspace_pkg, batched_strategies, gaussians, batched_cameras_nearest = batched_nearest_cameras
+        )
+        batch_statistic_collector = [
+            cuda_args["stats_collector"]
+            for cuda_args in batched_screenspace_pkg["batched_cuda_args"]
+        ]
         loss_sum, batched_losses = batched_loss_computation(
             batched_image,
             batched_return_dict,
@@ -289,7 +266,7 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
         timers.stop("backward")
         utils.check_initial_gpu_memory_usage("after backward")
         if utils.DEFAULT_GROUP.size() > 1:
-        #同步一下mlp的grad(reference to Momtumgs)
+        #reference to Momtumgs
             with torch.no_grad():
                 # all reduce mlp grad
                 for param in gaussians.mlp_opacity.parameters():
@@ -366,12 +343,8 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
             end2end_timers.start()
 
             # Densification
-            if args.backend == "gsplat":
-                gsplat_densification(
-                    iteration, scene, gaussians, batched_screenspace_pkg
-                )
-            else:
-                densification(iteration, scene, gaussians, batched_screenspace_pkg)
+
+            densification(iteration, scene, gaussians, batched_screenspace_pkg)
 
             # Save Gaussians
             if any(
@@ -450,9 +423,10 @@ def training(dataset_args, opt_args, pipe_args, args, log_file):
             viewpoint_cam
         ) in batched_cameras:  # Release memory of locally rendered original_image
             viewpoint_cam.original_image = None
-            viewpoint_cam.image_gray = None 
-            viewpoint_cam.invdepthmap = None
-        if iteration >  opt_args.multi_view_weight_from_iter:
+            if args.distributed_dataset_storage:
+                viewpoint_cam.image_gray = None 
+                viewpoint_cam.invdepthmap = None
+        if iteration >  opt_args.multi_view_weight_from_iter and args.distributed_dataset_storage:
             for (
                 nearest_camera
             ) in batched_nearest_cameras: 
@@ -557,47 +531,34 @@ def training_report(
                     load_camera_from_cpu_to_all_gpu_for_eval(
                         batched_cameras, batched_strategies, gpuid2tasks
                     )
-                    if backend == "gsplat":
-                        batched_screenspace_pkg = (
-                            gsplat_distributed_preprocess3dgs_and_all2all_final(
-                                batched_cameras,
-                                scene.gaussians,
-                                pipe_args,
-                                background,
-                                batched_strategies=batched_strategies,
-                                mode="test",
-                            )
+
+                    batched_voxel_mask = [] 
+                    batched_nearest_voxel_mask= []
+                    batched_nearest_cameras= []
+                    for camera in batched_cameras:
+                        scene.gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
+                        voxel_visible_mask = prefilter_voxel(camera, scene.gaussians, pipe_args, background)
+                        batched_voxel_mask.append(voxel_visible_mask)
+                        batched_nearest_voxel_mask.append(None)
+                        batched_nearest_cameras.append(None)
+                    # retain_grad = (iteration < opt_args.update_until and iteration >= 0)
+
+                    batched_screenspace_pkg = (
+                        distributed_preprocess3dgs_and_all2all_final(
+                            batched_cameras,
+                            scene.gaussians,
+                            pipe_args,
+                            batched_voxel_mask = batched_voxel_mask,
+                            bg_color = background,
+                            batched_strategies=batched_strategies,
+                            batched_nearest_cameras = batched_nearest_cameras,
+                            batched_nearest_voxel_mask = batched_nearest_voxel_mask,
+                            mode="test",
                         )
-                        batched_image, _ = gsplat_render_final(
-                            batched_screenspace_pkg, batched_strategies
-                        )
-                    else:
-                        batched_voxel_mask = [] 
-                        batched_nearest_voxel_mask= []
-                        batched_nearest_cameras= []
-                        for camera in batched_cameras:
-                            scene.gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
-                            voxel_visible_mask = prefilter_voxel(camera, scene.gaussians, pipe_args, background)
-                            batched_voxel_mask.append(voxel_visible_mask)
-                            batched_nearest_voxel_mask.append(None)
-                            batched_nearest_cameras.append(None)
-                        # retain_grad = (iteration < opt_args.update_until and iteration >= 0)
-                        batched_screenspace_pkg = (
-                            distributed_preprocess3dgs_and_all2all_final(
-                                batched_cameras,
-                                scene.gaussians,
-                                pipe_args,
-                                batched_voxel_mask = batched_voxel_mask,
-                                bg_color = background,
-                                batched_strategies=batched_strategies,
-                                batched_nearest_cameras = batched_nearest_cameras,
-                                batched_nearest_voxel_mask = batched_nearest_voxel_mask,
-                                mode="test",
-                            )
-                        )
-                        batched_image, batched_compute_locally, batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict, _ = render_final(
-                            batched_cameras, batched_screenspace_pkg, batched_strategies
-                        )
+                    )
+                    batched_image, batched_compute_locally, batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict, _ = render_final(
+                        batched_cameras, batched_screenspace_pkg, batched_strategies
+                    )
                     for camera_id, (image, gt_camera, render_pkg) in enumerate(
                         zip(batched_image, batched_cameras, batched_return_dict)
                     ):
