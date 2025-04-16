@@ -25,9 +25,7 @@ from kornia import create_meshgrid
 import cv2
 
 import os
-os.environ['NCCL_BLOCKING_WAIT'] = '1'
-os.environ['NCCL_ASYNC_ERROR_HANDLING'] = '1'
-os.environ['NCCL_TIMEOUT'] = '3600'  # 设置超时时间为3600秒
+
 
 
 
@@ -85,7 +83,7 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
         # assert resized_image_rgb.shape[0] == 3, "Image should have exactly 3 channels!"
         gt_image = resized_image_rgb[:3, ...].contiguous()
         loaded_mask = None
-        # gt_image = None
+
         # Free the memory: because the PIL image has been converted to torch tensor, we don't need it anymore. And it takes up lots of cpu memory.
         image.close()
         image = None
@@ -94,7 +92,6 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
                 depth_path = cam_info.image_path.replace("images/", "depths/", 1)
             else:
                 depth_path = cam_info.image_path.replace('rgbs','depths')
-
 
             depth_path = depth_path.replace('jpg','png')
             _normal_path = cam_info.image_path.replace('rgbs','normals')
@@ -153,6 +150,7 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
                 # noraml_gt= _normal/ normal_norm
                 normal_gt = None
                 normal_mask = None
+            
 
     else:
         gt_image = None
@@ -164,9 +162,9 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
         normal_mask = None
         resized_image_gray =None
 
-
+        # invdepthmap[mask.unsqueeze(0)] = 0
+        # mask = None
     if return_image:
-
         return gt_image, depth_reliable, invdepthmap, mask, noraml_gt, normal_mask, resized_image_gray
 
     return Camera(
@@ -398,23 +396,10 @@ def set_rays_od(cams):
 def cameraList_from_camInfos(cam_infos, args):
     args = get_args()
 
-    if utils.DEFAULT_GROUP.size() > 1 and args.multiprocesses_image_loading and args.distributed_dataset_storage:
-        if utils.LOCAL_RANK == 0 :
-            decompressed_images, depth_reliables, invdepthmaps,  depth_masks, noramls_gt, normal_masks, resized_image_gray = decompressed_images_from_camInfos_multiprocess(
-                cam_infos, args
-            )
-        else:
-            decompressed_images = [None for _ in cam_infos]
-            depth_reliables = [None for _ in cam_infos]
-            invdepthmaps = [None for _ in cam_infos]
-            normal_masks = [None for _ in cam_infos]
-            noramls_gt = [None for _ in cam_infos]
-            depth_masks = [None for _ in cam_infos]
-            resized_image_gray = [None for _ in cam_infos]
-    elif utils.DEFAULT_GROUP.size() > 1 and args.multiprocesses_image_loading and not args.distributed_dataset_storage: #load all on evry porcess
+    if utils.DEFAULT_GROUP.size() > 1 and args.multiprocesses_image_loading:
         decompressed_images, depth_reliables, invdepthmaps,  depth_masks, noramls_gt, normal_masks, resized_image_gray = decompressed_images_from_camInfos_multiprocess(
-                cam_infos, args
-            )
+            cam_infos, args
+        )
         # decompressed_images = decompressed_images_from_camInfos_multiprocess_sharedmem(cam_infos, resolution_scale, args)
     else:
         decompressed_images, depth_reliables, invdepthmaps,  depth_masks, noramls_gt, normal_masks, resized_image_gray = decompressed_images_from_camInfos_multiprocess_single_gpu(
@@ -425,8 +410,6 @@ def cameraList_from_camInfos(cam_infos, args):
         # invdepthmaps = [None for _ in cam_infos]
         # normal_masks = [None for _ in cam_infos]
         # noramls_gt = [None for _ in cam_infos]
-        # depth_masks = [None for _ in cam_infos]
-        # resized_image_gray = [None for _ in cam_infos]
         
 
     camera_list = []

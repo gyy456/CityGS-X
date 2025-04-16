@@ -65,8 +65,8 @@ class AuxiliaryParams(ParamGroup):
     def __init__(self, parser, sentinel=False):
         self.debug_from = -1
         self.detect_anomaly = False
-        self.test_iterations = [50_000, 100_000, 150_000, 200_000]
-        self.save_iterations = [1_000, 150_000, 200_000]
+        self.test_iterations = [10_000, 20_000, 30_000, 40_000, 50_000, 100_000, 150_000, 200_000]
+        self.save_iterations = [150_000, 200_000]
         self.quiet = False
         self.checkpoint_iterations = []
         self.start_checkpoint = ""
@@ -227,13 +227,13 @@ class OptimizationParams(ParamGroup):
         self.single_view_weight = 0.015
         self.single_view_weight_from_iter = 10000
         self.multi_view_weight_from_iter = 10000
+        self.dpt_end_iter = 50000
         self.scale_loss_from_iter = 0
         self.depth_l1_weight_init = 1.0
         self.depth_l1_weight_final = 0.01
         self.dpt_loss_from_iter = 10000
         self.multi_view_pixel_noise_th = 1
         self.multi_view_patch_size = 3
-        self.multi_view_geo_weight = 0.03
         self.multi_view_ncc_weight = 0.15
         self.wo_use_geo_occ_aware = False
         self.default_voxel_size = 0.0001
@@ -254,7 +254,7 @@ class DistributionParams(ParamGroup):
 
         # Distribution for 3DGS-wise workloads.
         self.gaussians_distribution = True
-        self.redistribute_gaussians_mode = "random_redistribute"  # "no_redistribute"
+        self.redistribute_anchor_mode = "random_redistribute"  # "no_redistribute"
         self.redistribute_anchors_frequency = (
             10 # redistribution frequency for anchors.
         )

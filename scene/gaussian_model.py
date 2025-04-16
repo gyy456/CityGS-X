@@ -478,25 +478,25 @@ class GaussianModel:
             mask = random_idx % shard_world_size == the_idx
             index = random_idx[mask]
 
-            anchor_ind_l, anchor_ind_r = utils.get_local_chunk_l_r(
-                anchor.shape[0], shard_world_size, shard_rank
-            )
-            anchor = anchor[anchor_ind_l:anchor_ind_r].contiguous()
-            offsets = offsets[anchor_ind_l:anchor_ind_r].contiguous()
-            anchors_feat = anchors_feat[anchor_ind_l:anchor_ind_r].contiguous()
-            scales = scales[anchor_ind_l:anchor_ind_r].contiguous()
-            rots = rots[anchor_ind_l:anchor_ind_r].contiguous()
-            opacities = opacities[anchor_ind_l:anchor_ind_r].contiguous()
-            self._level = self._level[anchor_ind_l:anchor_ind_r].contiguous()
+            # anchor_ind_l, anchor_ind_r = utils.get_local_chunk_l_r(
+            #     anchor.shape[0], shard_world_size, shard_rank
+            # )
+            # anchor = anchor[anchor_ind_l:anchor_ind_r].contiguous()
+            # offsets = offsets[anchor_ind_l:anchor_ind_r].contiguous()
+            # anchors_feat = anchors_feat[anchor_ind_l:anchor_ind_r].contiguous()
+            # scales = scales[anchor_ind_l:anchor_ind_r].contiguous()
+            # rots = rots[anchor_ind_l:anchor_ind_r].contiguous()
+            # opacities = opacities[anchor_ind_l:anchor_ind_r].contiguous()
+            # self._level = self._level[anchor_ind_l:anchor_ind_r].contiguous()
 
 
-            # anchor = anchor[index].contiguous()
-            # offsets = offsets[index].contiguous()
-            # anchors_feat = anchors_feat[index].contiguous()
-            # scales = scales[index].contiguous()
-            # rots = rots[index].contiguous()
-            # opacities = opacities[index].contiguous()
-            # self._level = self._level[index].contiguous()
+            anchor = anchor[index].contiguous()
+            offsets = offsets[index].contiguous()
+            anchors_feat = anchors_feat[index].contiguous()
+            scales = scales[index].contiguous()
+            rots = rots[index].contiguous()
+            opacities = opacities[index].contiguous()
+            self._level = self._level[index].contiguous()
 
 
 
@@ -1682,7 +1682,7 @@ class GaussianModel:
 
     def redistribute_gaussians(self):
         args = utils.get_args()
-        if args.redistribute_gaussians_mode == "no_redistribute":
+        if args.redistribute_anchor_mode == "no_redistribute":
             return
 
         comm_group_for_redistribution = self.group_for_redistribution()
@@ -1690,13 +1690,13 @@ class GaussianModel:
             return
 
         # Get each anchors' destination GPU.
-        if args.redistribute_gaussians_mode == "random_redistribute":
+        if args.redistribute_anchor_mode == "random_redistribute":
             # random redistribution to balance the number of gaussians on each GPU.
             destination = self.get_destination_1(comm_group_for_redistribution.size())
         else:
             raise ValueError(
-                "Invalid redistribute_gaussians_mode: "
-                + args.redistribute_gaussians_mode
+                "Invalid redistribute_anchor_mode: "
+                + args.redistribute_anchor_mode
             )
 
         # Count the number of anchors to be sent to each GPU.

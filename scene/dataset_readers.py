@@ -254,14 +254,9 @@ def readColmapSceneInfo_martix(path, images, eval, llffhold=97):
     )
     cam_infos = sorted(cam_infos_unsorted.copy(), key=lambda x: x.image_name)
 
-    if eval:
-        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
-        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
-    else:
-        # train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
-        # test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
-        train_cam_infos = [c for idx, c in enumerate(cam_infos) if not os.path.exists(c.image_path.replace('train/', 'val/'))]
-        test_cam_infos  = [c for idx, c in enumerate(cam_infos) if os.path.exists(c.image_path.replace('train/', 'val/'))]
+
+    train_cam_infos = [c for idx, c in enumerate(cam_infos) if not os.path.exists(c.image_path.replace('train/', 'val/'))]
+    test_cam_infos  = [c for idx, c in enumerate(cam_infos) if os.path.exists(c.image_path.replace('train/', 'val/'))]
 
 
     nerf_normalization = getNerfppNorm(train_cam_infos)

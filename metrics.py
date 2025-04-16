@@ -73,7 +73,7 @@ def evaluate(model_paths, mode):
 
         for method in os.listdir(test_dir):
             # method = "ours_"
-            method = "ours_199993"
+            # method = "ours_199993"
             print("Method:", method)
 
             full_dict[scene_dir][method] = {}

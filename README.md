@@ -67,7 +67,7 @@ For real world datasets depth maps should be generated for each input images, to
     python  multi_view_precess.py  -s  datasets/<scene_name> --resolution 4    --model_path datasets/<scene_name>/train/mask  --images train/rgbs  --pixel_thred 1
     ```
 
-- pixel_thred: filter the pixel_loss > thred;
+- pixel_thred: set the thred of the pixel position loss;
 ## Data
 
 First, create a ```data/``` folder inside the project path by 
@@ -107,24 +107,6 @@ data/
 
 
 
-## Evaluation
-
-We've integrated the rendering and metrics calculation process into the training code. So, when completing training, the ```rendering results```, ```fps``` and ```quality metrics``` will be printed automatically. And the rendering results will be save in the log dir. Mind that the ```fps``` is roughly estimated by 
-
-```
-torch.cuda.synchronize();t_start=time.time()
-rendering...
-torch.cuda.synchronize();t_end=time.time()
-```
-
-which may differ somewhat from the original 3D-GS, but it does not affect the analysis.
-
-Meanwhile, we keep the manual rendering function with a similar usage of the counterpart in [3D-GS](https://github.com/graphdeco-inria/gaussian-splatting), one can run it by 
-
-```
-python render.py -m <path to trained model> # Generate renderings
-python metrics.py -m <path to trained model> # Compute error metrics on renderings
-```
 
 ## Training
 
@@ -132,7 +114,7 @@ python metrics.py -m <path to trained model> # Compute error metrics on renderin
 
 To train multiple scenes in parallel, we provide batch training scripts: 
 
- - Mill-19 and UrbanScene3D: ```train_mill.sh```
+ - Mill-19 and UrbanScene3D: ```train_mill19.sh```
 
  - MatrixCity: ```train_matrix_city.sh```
 
@@ -148,13 +130,17 @@ bash train_xxx.sh
 
 ### Training a single scene on 4 gpu (for example)
 
+train_mill19.sh
+```
+torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> --iterations 100000 --images train/rgbs --single_view_weight_from_iter 10000  --depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 --dpt_loss_from_iter 10000  --multi_view_weight_from_iter 30000 --default_voxel_size 0.001 --dpt_end_iter 50_000
+```
+
+### Single gpu
 
 ```
-torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> --iterations 100000 --images train/rgbs \
-    --single_view_weight_from_iter 10000  --depth_l1_weight_final 0.01 --depth_l1_weight_init 1 --dpt_loss_from_iter 10000  --multi_view_weight_from_iter 30000 \
-    # --not_use_dpt_loss --not_use_multi_view_loss --not_use_single_view_loss 
-
+python train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> --iterations 100000 --images train/rgbs --single_view_weight_from_iter 10000  --depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 --dpt_loss_from_iter 10000  --multi_view_weight_from_iter 30000 --default_voxel_size 0.001 --dpt_end_iter 50_000
 ```
+
 
 - not_use_dpt_loss: you can jump Step2 for depth supervision;
 - not_use_multi_view_loss: you can jump Step3 for depth supervision;
@@ -166,8 +152,49 @@ torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz
 - dpt_loss_from_iter: set the start iteration of the depth supervision default 10_000;
 - multi_view_weight_from_iter: seet the start iteration of multi-view constrains default 30_000;
 - default_voxel_size: set the mean voxel size of the anchor default 0.0001;
-- distributed_dataset_storage: if cpu memory is enough set it False (Load all the depth and gray image on every process), if cpu memory is not enough set it Ture(Load depth and gray image on one process and broadcast to other process).
-- distributed_save: if Ture load the final model seperately by process, if False load the final model in one model.
+- distributed_dataset_storage: if cpu memory is enough set it False (Load all the RGB depth and gray image on every process), if cpu memory is not enough set it Ture(Load RGB depth and gray image on one process and broadcast to other process).
+- distributed_save: if Ture load the final model seperately by process, if False load the final model in one model(default)
+- default_voxel_size: set the default voxel size for initialization.
+- dpt_end_iter: step2 supervision depth end iteration.
+
+
+
+## Evaluation
+Except MatrixCity, evalutaion image is saved during training by default and PSNR is also calcuated.
+### multi gpu
+
+```
+torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path>  --images train/rgbs --skip_train
+```
+
+### single gpu
+
+```
+python render.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path>  --images train/rgbs --skip_train
+```
+
+## Metric
+```
+python metrics.py -m output/<save_path>
+```
+
+
+## Mesh extract
+### multi gpu
+if distributed_save==Ture, you can load models with same training gpu to extract mesh
+
+```
+torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path>  --images train/rgbs --voxel_size 0.001 --max_depth 5 --use_depth_filter
+```
+
+if distributed_save==False, you can load the whole model on one gpu to extract the mesh
+### single gpu
+
+```
+python train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path>  --images train/rgbs --voxel_size 0.001 --max_depth 5 --use_depth_filter
+```
+
+- voxel_size: set the mesh voxel size.
 
 ## Acknowledgement
 We would like to express our gratitude to the authors of the following algorithms and libraries, which have greatly inspired and supported this project:
