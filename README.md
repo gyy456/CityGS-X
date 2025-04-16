@@ -196,6 +196,15 @@ python train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path
 
 - voxel_size: set the mesh voxel size.
 
+
+## Metric for F1 score
+
+eval_f1.sh
+```
+python eval_f1.py --ply_path_pred <mesh_path> --ply_path_gt <gt_point_cloud_path> --dtau 0.5
+```
+
+
 ## Acknowledgement
 We would like to express our gratitude to the authors of the following algorithms and libraries, which have greatly inspired and supported this project:
 
