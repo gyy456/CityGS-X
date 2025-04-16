@@ -54,17 +54,19 @@ For real world datasets depth maps should be generated for each input images, to
     git clone https://github.com/DepthAnything/Depth-Anything-V2.git
     ```
 2. Download weights from [Depth-Anything-V2-Large](https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth?download=true) and place it under `Depth-Anything-V2/checkpoints/`
-3. Generate depth maps:
+3. Generate depth maps (set the depth image reslution align with the training reslution you want):
    ```
-   python Depth-Anything-V2/run.py --encoder vitl --pred-only --grayscale --img-path <path to input images> --outdir <output path>
+   python Depth-Anything-V2/run.py --encoder vitl --pred-only --grayscale --img-path <path to input images> \
+   --outdir <output path>
    ```
-5. Generate a `depth_params.json` file using (set the depth image reslution align with the training reslution you want):
+5. Generate a `depth_params.json` file using:
     ```
     python utils/make_depth_scale.py --base_dir <path to colmap> --depths_dir <path to generated depths>
     ```
 6. use the multi-view constrains to filter the depth:
     ```
-    python  multi_view_precess.py  -s  datasets/<scene_name> --resolution 4    --model_path datasets/<scene_name>/train/mask  --images train/rgbs  --pixel_thred 1
+    python  multi_view_precess.py  -s  datasets/<scene_name> --resolution 4 \
+    --model_path datasets/<scene_name>/train/mask  --images train/rgbs  --pixel_thred 1
     ```
 
 - pixel_thred: set the thred of the pixel position loss;
@@ -128,22 +130,29 @@ bash train_xxx.sh
 
  > Notice 2: Each process occupies many cpu cores, which may slow down the training process. Set ```torch.set_num_threads(32)``` accordingly in the ```train.py``` to alleviate it.
 
-### Training a single scene on 4 gpu (for example)
+### Training a single scene on multi-gpu
 
 train_mill19.sh
 ```
-torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> --iterations 100000 --images train/rgbs --single_view_weight_from_iter 10000  --depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 --dpt_loss_from_iter 10000  --multi_view_weight_from_iter 30000 --default_voxel_size 0.001 --dpt_end_iter 50_000
+torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz> -s datasets/<scene_name> \
+--resolution 4 --model_path output/<save_path> --iterations 100000 --images train/rgbs \
+--single_view_weight_from_iter 10000  --depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 \
+--dpt_loss_from_iter 10000  --multi_view_weight_from_iter 30000 --default_voxel_size 0.001 \
+--dpt_end_iter 40_000
 ```
 
 ### Single gpu
 
 ```
-python train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> --iterations 100000 --images train/rgbs --single_view_weight_from_iter 10000  --depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 --dpt_loss_from_iter 10000  --multi_view_weight_from_iter 30000 --default_voxel_size 0.001 --dpt_end_iter 50_000
+python train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> \
+--iterations 100000 --images train/rgbs --single_view_weight_from_iter 10000 \ 
+--depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 --dpt_loss_from_iter 10000 \ 
+--multi_view_weight_from_iter 30000 --default_voxel_size 0.001 --dpt_end_iter 40_000
 ```
 
 
-- not_use_dpt_loss: you can jump Step2 for depth supervision;
-- not_use_multi_view_loss: you can jump Step3 for depth supervision;
+- not_use_dpt_loss: you can jump Step2 depth supervision;
+- not_use_multi_view_loss: you can jump Step3 multi-view geometric constrains;
 - not_use_single_view_loss: you can choose not use the single-view geometric loss;
 - gpu_num: specify the GPU number to use ;
 - bsz: set the taining batch size;
@@ -151,12 +160,13 @@ python train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path
 - scale_loss_from_iter:  set the start iteration of the scale loss default 0;
 - dpt_loss_from_iter: set the start iteration of the depth supervision default 10_000;
 - multi_view_weight_from_iter: seet the start iteration of multi-view constrains default 30_000;
-- default_voxel_size: set the mean voxel size of the anchor default 0.0001;
+- default_voxel_size: set the mean voxel size of the anchor default 0.001; (default_voxel_size will influence the final anchors number)
 - distributed_dataset_storage: if cpu memory is enough set it False (Load all the RGB depth and gray image on every process), if cpu memory is not enough set it Ture(Load RGB depth and gray image on one process and broadcast to other process).
 - distributed_save: if Ture load the final model seperately by process, if False load the final model in one model(default)
 - default_voxel_size: set the default voxel size for initialization.
 - dpt_end_iter: step2 supervision depth end iteration.
 
+The training time may faster than the table provided by our paper, as we have optimize the mutlti-process dataloader.
 
 
 ## Evaluation
@@ -164,13 +174,16 @@ Except MatrixCity, evalutaion image is saved during training by default and PSNR
 ### multi gpu
 
 ```
-torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path>  --images train/rgbs --skip_train
+torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render.py --bsz <bsz> \ 
+-s datasets/<scene_name> --resolution 4 --model_path output/<save_path> \
+--images train/rgbs --skip_train
 ```
 
 ### single gpu
 
 ```
-python render.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path>  --images train/rgbs --skip_train
+python render.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 \ 
+--model_path output/<save_path> --images train/rgbs --skip_train
 ```
 
 ## Metric
@@ -184,14 +197,18 @@ python metrics.py -m output/<save_path>
 if distributed_save==Ture, you can load models with same training gpu to extract mesh
 
 ```
-torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path>  --images train/rgbs --voxel_size 0.001 --max_depth 5 --use_depth_filter
+torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render_mesh.py --bsz <bsz> \ 
+-s datasets/<scene_name> --resolution 4 --model_path output/<save_path> \
+--images train/rgbs --voxel_size 0.001 --max_depth 5 --use_depth_filter
 ```
 
 if distributed_save==False, you can load the whole model on one gpu to extract the mesh
 ### single gpu
 
 ```
-python train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path>  --images train/rgbs --voxel_size 0.001 --max_depth 5 --use_depth_filter
+python render_mesh.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 \ 
+--model_path output/<save_path> --images train/rgbs --voxel_size 0.001 \ 
+--max_depth 5 --use_depth_filter
 ```
 
 - voxel_size: set the mesh voxel size.

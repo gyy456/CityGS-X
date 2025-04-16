@@ -585,76 +585,7 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     return scene_info
 
 
-def readCityInfo(
-    path,
-    random_background,
-    white_background,
-    extension=".tif",
-    llffhold=83,
-    undistorted=False,
-):
 
-    train_json_path = os.path.join(path, f"transforms_train.json")
-    test_json_path = os.path.join(path, f"transforms_test.json")
-    print(
-        "Reading Training Transforms from {} {}".format(train_json_path, test_json_path)
-    )
-
-    train_cam_infos = readCamerasFromTransformsCity(
-        path,
-        train_json_path,
-        random_background,
-        white_background,
-        extension,
-        undistorted,
-    )
-    test_cam_infos = readCamerasFromTransformsCity(
-        path,
-        test_json_path,
-        random_background,
-        white_background,
-        extension,
-        undistorted,
-    )
-    print("Load Cameras(train, test): ", len(train_cam_infos), len(test_cam_infos))
-
-    nerf_normalization = getNerfppNorm(train_cam_infos)
-    basename = os.path.basename(path)
-    ply_path = os.path.join("datasets/MatrixCity/aerial/small_city/aerial/colmap/train/sparse/0/points3D.ply")
-    bin_path = os.path.join("datasets/MatrixCity/aerial/small_city/aerial/colmap/train/sparse/0/points3D.bin")
-    txt_path = os.path.join(path, "sparse/0/points3D.txt")
-    if not os.path.exists(ply_path):
-        if utils.GLOBAL_RANK == 0:
-            print(
-                "Converting point3d.bin to .ply, will happen only the first time you open the scene."
-            )
-            try:
-                xyz, rgb, _ = read_points3D_binary(bin_path)
-            except:
-                xyz, rgb, _ = read_points3D_text(txt_path)
-            storePly(ply_path, xyz, rgb)
-            if utils.DEFAULT_GROUP.size() > 1:
-                torch.distributed.barrier()
-        else:
-            if utils.DEFAULT_GROUP.size() > 1:
-                torch.distributed.barrier()
-
-    if os.path.exists(ply_path):
-        try:
-            pcd = fetchPly(ply_path)
-        except:
-            raise ValueError("must have tiepoints!")
-    else:
-        assert False, "No ply file found!"
-
-    scene_info = SceneInfo(
-        point_cloud=pcd,
-        train_cameras=train_cam_infos,
-        test_cameras=test_cam_infos,
-        nerf_normalization=nerf_normalization,
-        ply_path=ply_path,
-    )
-    return scene_info
 
 
 sceneLoadTypeCallbacks = {
