@@ -467,10 +467,10 @@ def training_report(
             {
                 "name": "train",
                 "cameras": scene.getTrainCameras(),
-                "num_cameras": max(len(scene.getTrainCameras()) // args.llffhold, args.bsz),
+                "num_cameras": max(20, args.bsz),
             },
         )
-
+        
 
         # init workload division strategy
         for config in validation_configs:
@@ -658,31 +658,31 @@ def training_report(
                             #     torch.tensor(normal).permute(2,0,1)/255.0,
                             #     os.path.join(render_normal_path, gt_camera.image_name + ".png"),
                             # )
-                            if "MatrixCity" in args.source_path:
-                                filename = gt_camera.image_name.split("/")[-1]  # 获取 "0068.png"
-                                torchvision.utils.save_image(
+                            # if "MatrixCity" in args.source_path:
+                            #     filename = gt_camera.image_name.split("/")[-1]  # 获取 "0068.png"
+                            #     torchvision.utils.save_image(
+                            #     image,
+                            #     os.path.join(render_path, filename ),
+                            #     )
+                            #     torchvision.utils.save_image(
+                            #         gt_image,
+                            #         os.path.join(gts_path, filename ),
+                            #     )
+                            #     # cv2.imwrite(os.path.join(rendered_distance_path,  filename ), distance_color)
+                            #     cv2.imwrite(os.path.join(depths_path,  filename ), depth_color)
+                            #     # cv2.imwrite(os.path.join(render_normal_path,  filename), normal)
+                            # else:
+                            torchvision.utils.save_image(
                                 image,
-                                os.path.join(render_path, filename ),
-                                )
-                                torchvision.utils.save_image(
-                                    gt_image,
-                                    os.path.join(gts_path, filename ),
-                                )
-                                # cv2.imwrite(os.path.join(rendered_distance_path,  filename ), distance_color)
-                                cv2.imwrite(os.path.join(depths_path,  filename ), depth_color)
-                                # cv2.imwrite(os.path.join(render_normal_path,  filename), normal)
-                            else:
-                                torchvision.utils.save_image(
-                                    image,
-                                    os.path.join(render_path, gt_camera.image_name + ".png"),
-                                )
-                                torchvision.utils.save_image(
-                                    gt_image,
-                                    os.path.join(gts_path, gt_camera.image_name + ".png"),
-                                )
-                                cv2.imwrite(os.path.join(rendered_distance_path,  gt_camera.image_name + ".png"), distance_color)
-                                cv2.imwrite(os.path.join(depths_path,  gt_camera.image_name + ".png"), depth_color)
-                                cv2.imwrite(os.path.join(render_normal_path,  gt_camera.image_name + ".png"), normal)
+                                os.path.join(render_path, gt_camera.image_name + ".png"),
+                            )
+                            torchvision.utils.save_image(
+                                gt_image,
+                                os.path.join(gts_path, gt_camera.image_name + ".png"),
+                            )
+                            cv2.imwrite(os.path.join(rendered_distance_path,  gt_camera.image_name + ".png"), distance_color)
+                            cv2.imwrite(os.path.join(depths_path,  gt_camera.image_name + ".png"), depth_color)
+                            cv2.imwrite(os.path.join(render_normal_path,  gt_camera.image_name + ".png"), normal)
 
                         gt_camera.original_image = None
                 psnr_test /= num_cameras

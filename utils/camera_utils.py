@@ -89,14 +89,17 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
         image = None
         if return_image: 
             if "MatrixCity" in cam_info.image_path:
-                depth_path = cam_info.image_path.replace("images/", "depths/", 1)
+                depth_path = cam_info.image_path.replace("images/", "depth/", 1)
+                mask_path = cam_info.image_path.replace('images','mask')
+                mask_path = mask_path.replace('jpg','png')
             else:
                 depth_path = cam_info.image_path.replace('rgbs','depths')
+                mask_path = cam_info.image_path.replace('rgbs','mask')
+                mask_path = mask_path.replace('jpg','png')
 
             depth_path = depth_path.replace('jpg','png')
             _normal_path = cam_info.image_path.replace('rgbs','normals')
-            mask_path = cam_info.image_path.replace('rgbs','mask')
-            mask_path = mask_path.replace('jpg','png')
+            
             resolution = (round(orig_w/(args.resolution)), round(orig_h/(args.resolution)))
 
             if ~args.not_use_multi_view_loss:

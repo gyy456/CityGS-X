@@ -1,5 +1,5 @@
 <div align="center">
-<h1>Offical Implementation of CityGS-𝒳</h1>
+<h1>Offical Implementation of CityGS-X</h1>
 
 <a href="https://arxiv.org/abs/2503.23044" target="_blank" rel="noopener noreferrer">
   <img src="https://img.shields.io/badge/Paper-VGGT" alt="Paper PDF">
@@ -13,14 +13,14 @@
 | CityGS-X : A Scalable Architecture for Efficient and Geometrically Accurate Large-Scale Scene Reconstruction
 
 
-[Yuanyuan Gao*](https://scholar.google.com/citations?hl=en&user=1zDq0q8AAAAJ), [Hao Li*](https://lifuguan.github.io/), [Jiaqi Chen*](https://github.com/chenttt2001), Zhengyu Zou, [Zhihang Zhong†](https://zzh-tech.github.io), [Dingwen Zhang†](https://vision-intelligence.com.cn), [Xiao Sun](https://jimmysuen.github.io), Junwei Han<br>(\* indicates equal contribution, † means Co-corresponding author)<br>
+[Yuanyuan Gao*](https://scholar.google.com/citations?hl=en&user=1zDq0q8AAAAJ), [Hao Li*](https://lifuguan.github.io/), [Jiaqi Chen*](https://github.com/chenttt2001), [Zhengyu Zou](https://vision-intelligence.com.cn), [Zhihang Zhong†](https://zzh-tech.github.io), [Dingwen Zhang†](https://vision-intelligence.com.cn), [Xiao Sun](https://jimmysuen.github.io), [Junwei Han](https://vision-intelligence.com.cn)<br>(\* indicates equal contribution, † means Co-corresponding author)<br>
 
 </div>
 
 ![Teaser image](assets/cityx_tease.jpg)
 
 ## Todo List
-- [ ] Release the training & inference code.
+- **[2025.4.17]** Release the training & inference code.
 - [ ] Release all model checkpoints.
 
 
@@ -41,23 +41,25 @@ cd CityGS-X
 SET DISTUTILS_USE_SDK=1 # Windows only
 conda env create --file environment.yml
 conda activate citygx-x
+pip install submodule_cityx/diff-gaussian-rasterization
+pip install submodule_cityx/simple-knn
 ```
 
 ### Depth regularization
 
 
-When training on a synthetic dataset, depth maps can be produced and they do not require further processing to be used in our method.
+When training on a synthetic dataset, depth maps can be produced and they do not require further processing to be used in our method. 
 
 For real world datasets depth maps should be generated for each input images, to generate them please do the following:
-1. Clone [Depth Anything v2](https://github.com/DepthAnything/Depth-Anything-V2?tab=readme-ov-file#usage):
+1. Clone [Depth Anything v2](https://github.com/DepthAnything/Depth-Anything-V2?tab=readme-ov-file#usage) （You can try other depth estimation models）:
     ```
     git clone https://github.com/DepthAnything/Depth-Anything-V2.git
     ```
 2. Download weights from [Depth-Anything-V2-Large](https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth?download=true) and place it under `Depth-Anything-V2/checkpoints/`
 3. Generate depth maps (set the depth image reslution align with the training reslution you want):
    ```
-   python Depth-Anything-V2/run.py --encoder vitl --pred-only --grayscale --img-path <path to input images> \
-   --outdir <output path>
+   python Depth-Anything-V2/run.py --encoder vitl --pred-only --grayscale \
+   --img-path <path to input images> --outdir <output path>
    ```
 5. Generate a `depth_params.json` file using:
     ```
@@ -69,7 +71,7 @@ For real world datasets depth maps should be generated for each input images, to
     --model_path datasets/<scene_name>/train/mask  --images train/rgbs  --pixel_thred 1
     ```
 
-- pixel_thred: set the thred of the pixel position loss;
+- pixel_thred: set the threshold of the pixel position loss;
 ## Data
 
 First, create a ```data/``` folder inside the project path by 
@@ -82,19 +84,18 @@ The data structure will be organised as follows:
 
 ```
 data/
-├── scene_name
+├── scene_name(Mill-19 and UrbanScene3D)
 │   ├── train/
 │   │   ├── rgbs
 │   │   │   ├── 000000.jpg
 │   │   │   ├── 000001.jpg
 │   │   │   ├── ...
 │   │   ├── depths
-│   │   │   ├── 000000.jpg
-│   │   │   ├── 000001.jpg
-│   │   │   ├── ...
+│   │   │   ├── 000000.png
+│   │   │   ├── 000001.png
 │   │   ├── mask
-│   │   │   ├── 000000.jpg
-│   │   │   ├── 000001.jpg
+│   │   │   ├── 000000.png
+│   │   │   ├── 000001.png
 │   │   │   ├── ...
 │   ├── val/
 │   │   ├── rgbs
@@ -103,6 +104,29 @@ data/
 │   │   │   ├── ...
 │   ├── sparse/
 │   │   └──0/
+├── scene_name(MatrixCity)
+│   ├── train/
+│   │   ├── images
+│   │   │   ├── 0000.png
+│   │   │   ├── 0001.png
+│   │   │   ├── ...
+│   │   ├── depth
+│   │   │   ├── 0000.png
+│   │   │   ├── 0001.png
+│   │   │   ├── ...
+│   │   ├── mask
+│   │   │   ├── 0000.png
+│   │   │   ├── 0001.png
+│   │   │   ├── ...
+│   │   ├── sparse
+│   │       └──0/
+│   ├── test/
+│   │   ├── images
+│   │   │   ├── 0000.png
+│   │   │   ├── 0001.png
+│   │   │   ├── ...
+│   │   ├── sparse/
+│   │       └──0/
 ...
 ```
 
@@ -125,10 +149,6 @@ To train multiple scenes in parallel, we provide batch training scripts:
  ```
 bash train_xxx.sh
  ```
-
- > Notice 1: Make sure you have enough GPU cards and memories to run these scenes at the same time.
-
- > Notice 2: Each process occupies many cpu cores, which may slow down the training process. Set ```torch.set_num_threads(32)``` accordingly in the ```train.py``` to alleviate it.
 
 ### Training a single scene on multi-gpu
 
@@ -170,7 +190,7 @@ The training time may faster than the table provided by our paper, as we have op
 
 
 ## Evaluation
-Except MatrixCity, evalutaion image is saved during training by default and PSNR is also calcuated.
+Except MatrixCity, evalutaion image is saved and PSNR is also calcuate dduring training by default.
 ### multi gpu
 
 ```
