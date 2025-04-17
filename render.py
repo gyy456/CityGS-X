@@ -144,7 +144,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
                 )
                 torch.distributed.all_reduce(
                                 depth, op=dist.ReduceOp.SUM, group=utils.DEFAULT_GROUP
-                            )s.DEFAULT_GROUP.size() > 1:
+                            )
                 torch.distributed.all_reduce(
                     normal, op=dist.ReduceOp.SUM, group=utils.DEFAULT_GROUP
                 )
