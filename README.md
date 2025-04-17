@@ -19,10 +19,9 @@
 
 ![Teaser image](assets/cityx_tease.jpg)
 
-
 ## Project Updates
 - 🔥🔥 News: ```2025/4/17```: training & inference code is now available! You can try it.
-
+  
 ## Todo List
 - [x] Release the training & inference code.
 - [ ] Release all model checkpoints.
