@@ -108,7 +108,7 @@ data/
 │   ├── sparse/
 │   │   └──0/
 ├── scene_name(MatrixCity)
-│   ├── train/
+│   ├── train/block_all
 │   │   ├── images
 │   │   │   ├── 0000.png
 │   │   │   ├── 0001.png
@@ -123,7 +123,7 @@ data/
 │   │   │   ├── ...
 │   │   ├── sparse
 │   │       └──0/
-│   ├── test/
+│   ├── test/block_all_test
 │   │   ├── images
 │   │   │   ├── 0000.png
 │   │   │   ├── 0001.png

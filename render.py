@@ -50,6 +50,27 @@ from arguments import (
     init_args,
 )
 import utils.general_utils as utils
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+
+
+
+def visualize_scalars(scalar_tensor: torch.Tensor) -> np.ndarray:
+    to_use = scalar_tensor.view(-1)
+    while to_use.shape[0] > 2 ** 24:
+        to_use = to_use[::2]
+
+    mi = torch.quantile(to_use, 0.05)
+    ma = torch.quantile(to_use, 0.95)
+
+    scalar_tensor = (scalar_tensor - mi) / max(ma - mi, 1e-8)  # normalize to 0~1
+    scalar_tensor = scalar_tensor.clamp_(0, 1)
+
+    scalar_tensor = ((1 - scalar_tensor) * 255).byte().numpy()  # inverse heatmap
+    return cv2.cvtColor(cv2.applyColorMap(scalar_tensor, cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
 
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background):
@@ -81,7 +102,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         progress_bar.update(args.bsz)
 
         num_camera_to_load = min(args.bsz, num_cameras - idx + 1)
-        batched_cameras = dataset.get_batched_cameras(num_camera_to_load, shuffle =False)
+        batched_cameras, _ = dataset.get_batched_cameras(num_camera_to_load, shuffle =False)
         batched_strategies, gpuid2tasks = start_strategy_final(
             batched_cameras, strategy_history
         )
@@ -89,11 +110,14 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             batched_cameras, batched_strategies, gpuid2tasks
         )
         batched_voxel_mask = [] 
+        batched_nearest_voxel_mask= []
+        batched_nearest_cameras= []
         for camera in batched_cameras:
             gaussians.set_anchor_mask(camera.camera_center, iteration, 1)
             voxel_visible_mask = prefilter_voxel(camera, gaussians, pipeline, background)
             batched_voxel_mask.append(voxel_visible_mask)
-
+            batched_nearest_voxel_mask.append(None)
+            batched_nearest_cameras.append(None)
         batched_screenspace_pkg = distributed_preprocess3dgs_and_all2all_final(
             batched_cameras,
             gaussians,
@@ -101,9 +125,13 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             background,
             batched_voxel_mask=batched_voxel_mask,
             batched_strategies=batched_strategies,
+            batched_nearest_cameras = batched_nearest_cameras,
+            batched_nearest_voxel_mask = batched_nearest_voxel_mask,
             mode="test",
+            return_plane = True
         )
-        batched_image, batched_compute_locally,  batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict = render_final(batched_screenspace_pkg, batched_strategies)
+
+        batched_image, batched_compute_locally,  batched_out_all_map, batched_out_observe, batched_out_plane_depth, batched_return_dict, _ = render_final(batched_cameras, batched_screenspace_pkg, batched_strategies)
 
         for camera_id, (image, gt_camera, render_pkg) in enumerate(
             zip(batched_image, batched_cameras, batched_return_dict)
@@ -161,12 +189,17 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
                     gt_image,
                     os.path.join(gts_path, gt_camera.image_name + ".png"),
                 )
+                depth_RED = visualize_scalars(torch.log(depth.squeeze(0) + 1e-8).detach().cpu())
+
                 depth = depth.detach().cpu().numpy().squeeze(0)
                 depth_i = (depth - depth.min()) / (depth.max() - depth.min() + 1e-20)
                 depth_i = (depth_i * 255).clip(0, 255).astype(np.uint8)
                 depth_color = cv2.applyColorMap(depth_i, cv2.COLORMAP_JET)
                 cv2.imwrite(os.path.join(depths_path,  gt_camera.image_name + ".png"), depth_color)
 
+                # depth_RED = visualize_scalars(torch.log(depth + 1e-8).detach().cpu())
+
+                plt.imsave(os.path.join(depths_path, 'depth-' +(gt_camera.image_name + '.png') ), depth_RED)
                 normal = normal.permute(1,2,0)
                 normal = normal/(normal.norm(dim=-1, keepdim=True)+1.0e-8)
                 normal = normal.detach().cpu().numpy()
@@ -203,7 +236,7 @@ def render_sets(
 
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-
+        gaussians.eval()
         if not skip_train:
             render_set(
                 dataset.model_path,
@@ -245,6 +278,9 @@ if __name__ == "__main__":
     parser.add_argument("--distributed_load", action="store_true")  # TODO: delete this.
     parser.add_argument("--l", default=-1, type=int)
     parser.add_argument("--r", default=-1, type=int)
+    parser.add_argument('--not_use_dpt_loss', action='store_false', help='Do not load dpt')
+    parser.add_argument('--not_use_single_view_loss', action='store_false', help='Do not use single view loss')
+    parser.add_argument('--not_use_multi_view_loss', action='store_false', help='Do not load gray image')    
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 

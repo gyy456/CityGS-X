@@ -338,6 +338,7 @@ def render_sets(
         dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist, dataset.add_level, 
         dataset.visible_threshold, dataset.dist2level, dataset.base_layer, dataset.progressive, dataset.extend
     )
+        gaussians.eval()
         scene = Scene(args, gaussians, load_iteration=iteration, shuffle=False)
 
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
