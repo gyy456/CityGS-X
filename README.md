@@ -18,7 +18,7 @@
 </div>
 
 ![Teaser image](assets/cityx_tease.jpg)
-- 🔥🔥 News: ```2025/4/17```: training & inference code is now available! you can try it.
+- 🔥🔥 News: ```2025/4/17```: training & inference code is now available! You can try it.
 
 ## Project Updates
 

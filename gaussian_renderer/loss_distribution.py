@@ -3017,11 +3017,7 @@ def batched_loss_computation(
                     # loss += (normal_loss)
                 except:
                     print(f'image_weight {image_weight.shape}, normal {normal.shape}, depth_normal {depth_normal.shape}, coverage_min_y {coverage_min_y},  coverage_max_y {coverage_max_y}')
-                    # if scaling.shape[0] > 0:
-                    #     scaling_reg = scaling.prod(dim=1).mean()
-                    # else:
-                    #     scaling_reg = torch.tensor(0.0, device="cuda")
-                    # loss += 0.01 * scaling_reg # 0.01
+
             if iterations > opt.dpt_loss_from_iter:
                 # if depth is not None:
                 depth = render_pkg["plane_depth"]
@@ -3045,34 +3041,10 @@ def batched_loss_computation(
                     else:
                         loss += Ll1depth
                         # print('depth_loss:', Ll1depth)
-            #     normal = render_pkg["rendered_normal"]
-            #     depth_normal = render_pkg["depth_normal"]
-            #     render_normal = (normal.permute(1,2,0) @ (camera.world_view_transform[:3,:3].T)).permute(2,0,1)
-            #     rendered_depth_normal = (depth_normal.permute(1,2,0) @ (camera.world_view_transform[:3,:3].T)).permute(2,0,1)
-            #     normal_gt = camera.noraml_gt.cuda()
-            #     normal_mask = camera.normal_mask.cuda()
-            # # if lambda_normal_prior > 0 and viewpoint_cam.normal_prior is not None:
-            #     prior_normal = normal_gt[:, coverage_min_y:coverage_max_y, :] * (render_pkg["rendered_alpha"][:, coverage_min_y:coverage_max_y, :]).detach()  #不透明的点影响越大 透明度大的点 较小
-            #     prior_normal_mask = normal_mask[0][coverage_min_y:coverage_max_y, :]
 
-            #     normal_prior_error = (1 - F.cosine_similarity(prior_normal[:, coverage_min_y:coverage_max_y, :], render_normal[:, coverage_min_y:coverage_max_y, :], dim=0)) + \
-            #                         (1 - F.cosine_similarity(prior_normal[:, coverage_min_y:coverage_max_y, :], rendered_depth_normal[:, coverage_min_y:coverage_max_y, :], dim=0))
-            #     normal_prior_error = normal_prior_error  
-            #     normal_prior_error = ranking_loss(normal_prior_error[prior_normal_mask], 
-            #                                     penalize_ratio=0.8, type='mean')
-                
-            #     normal_prior_loss = 0.08 * normal_prior_error
-            #     # except:
-            #     #     print(normal_gt.shape, render_pkg["rendered_alpha"].shape, normal_mask.shape, normal_prior_error.shape)
-            #     loss += (normal_prior_loss)   
 
             if nearest_render_pkg is not None and nearest_cam.image_name != camera.image_name:
-                # if iterations <opt.multi_view_weight_from_iter * 2:
-                #     ncc_weight = (iterations-opt.multi_view_weight_from_iter) / (opt.multi_view_weight_from_iter*2-opt.multi_view_weight_from_iter) * 0.2
-                #     geo_weight = (iterations-opt.multi_view_weight_from_iter) / (opt.multi_view_weight_from_iter*2-opt.multi_view_weight_from_iter) * 0.05
-                # else:
-                #     ncc_weight = 0.2
-                #     geo_weight = 0.05
+
                 pixel_noise_th = opt.multi_view_pixel_noise_th
                 # # total_patch_size = (patch_size * 2 + 1) ** 2
                 ncc_weight = opt.multi_view_ncc_weight
