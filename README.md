@@ -1,5 +1,5 @@
 <div align="center">
-<h1>Offical Implementation of CityGS-X</h1>
+<h1>CityGS-X</h1>
 
 <a href="https://arxiv.org/abs/2503.23044" target="_blank" rel="noopener noreferrer">
   <img src="https://img.shields.io/badge/Paper-VGGT" alt="Paper PDF">
@@ -8,19 +8,22 @@
 <a href="https://lifuguan.github.io/CityGS-X/"><img src="https://img.shields.io/badge/Project_Page-green" alt="Project Page"></a>
 
 
-**Northwestern Polytechnical University**; **Shanghai AI Lab**
+**Northwestern Polytechnical University**; **Shanghai Artificial Intelligence Laboratory**
 
 | CityGS-X : A Scalable Architecture for Efficient and Geometrically Accurate Large-Scale Scene Reconstruction
 
 
-[Yuanyuan Gao*](https://scholar.google.com/citations?hl=en&user=1zDq0q8AAAAJ), [Hao Li*](https://lifuguan.github.io/), [Jiaqi Chen*](https://github.com/chenttt2001), [Zhengyu Zou](https://vision-intelligence.com.cn), [Zhihang Zhong†](https://zzh-tech.github.io), [Dingwen Zhang†](https://vision-intelligence.com.cn), [Xiao Sun](https://jimmysuen.github.io), [Junwei Han](https://vision-intelligence.com.cn)<br>(\* indicates equal contribution, † means Co-corresponding author)<br>
+[Yuanyuan Gao*](https://scholar.google.com/citations?hl=en&user=1zDq0q8AAAAJ), [Hao Li*](https://lifuguan.github.io/), [Jiaqi Chen*](https://github.com/chenttt2001), [Zhengyu Zou](https://vision-intelligence.com.cn), [Zhihang Zhong†](https://zzh-tech.github.io), [Dingwen Zhang†](https://vision-intelligence.com.cn), [Xiao Sun](https://jimmysuen.github.io), [Junwei Han](https://vision-intelligence.com.cn)<br>(\* indicates equal contribution, † means co-corresponding author)<br>
 
 </div>
 
 ![Teaser image](assets/cityx_tease.jpg)
+- 🔥🔥 News: ```2025/4/17```: training & inference code is now available! you can try it.
+
+## Project Updates
 
 ## Todo List
-- **[2025.4.17]** Release the training & inference code.
+- [x] Release the training & inference code.
 - [ ] Release all model checkpoints.
 
 
@@ -150,9 +153,24 @@ To train multiple scenes in parallel, we provide batch training scripts:
 bash train_xxx.sh
  ```
 
-### Training a single scene on multi-gpu
+### Training a single scene
 
-train_mill19.sh
+- not_use_dpt_loss: you can jump Step2 depth supervision;
+- not_use_multi_view_loss: you can jump Step3 multi-view geometric constrains;
+- not_use_single_view_loss: you can choose not use the single-view geometric loss;
+- gpu_num: specify the GPU number to use;
+- bsz: set the taining batch size;
+- iteration: set the whole training iterations;
+- single_view_weight_from_iter: set the start iteration of the single-view geometric loss default `10_000`;
+- scale_loss_from_iter:  set the start iteration of the scale loss default `0`;
+- dpt_loss_from_iter: set the start iteration of the depth supervision default `10_000`;
+- multi_view_weight_from_iter: seet the start iteration of multi-view constrains default `30_000`;
+- default_voxel_size: set the mean voxel size of the anchor default `0.001`; (default_voxel_size will influence the final anchors number)
+- distributed_dataset_storage: if cpu memory is enough set it `False` (Load all the RGB depth and gray image on every process), if cpu memory is not enough， set it `Ture` (Load RGB depth and gray image on one process and broadcast to other process).
+- distributed_save: if Ture load the final model seperately by process, if `False` load the final model in one model(default)
+- default_voxel_size: set the default voxel size for initialization.
+- dpt_end_iter: set the end iteration of step2 depth supervision.
+ #### Multi gpu
 ```
 torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz> -s datasets/<scene_name> \
 --resolution 4 --model_path output/<save_path> --iterations 100000 --images train/rgbs \
@@ -161,37 +179,21 @@ torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz
 --dpt_end_iter 40_000
 ```
 
-### Single gpu
+ #### Single gpu
 
 ```
 python train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> \
 --iterations 100000 --images train/rgbs --single_view_weight_from_iter 10000 \ 
 --depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 --dpt_loss_from_iter 10000 \ 
---multi_view_weight_from_iter 30000 --default_voxel_size 0.001 --dpt_end_iter 40_000
+--multi_view_weight_from_iter 30000 --default_voxel_size 0.001 --dpt_end_iter 40000
 ```
 
-
-- not_use_dpt_loss: you can jump Step2 depth supervision;
-- not_use_multi_view_loss: you can jump Step3 multi-view geometric constrains;
-- not_use_single_view_loss: you can choose not use the single-view geometric loss;
-- gpu_num: specify the GPU number to use ;
-- bsz: set the taining batch size;
-- single_view_weight_from_iter: set the start iteration of the single-view geometric loss default 10_000;
-- scale_loss_from_iter:  set the start iteration of the scale loss default 0;
-- dpt_loss_from_iter: set the start iteration of the depth supervision default 10_000;
-- multi_view_weight_from_iter: seet the start iteration of multi-view constrains default 30_000;
-- default_voxel_size: set the mean voxel size of the anchor default 0.001; (default_voxel_size will influence the final anchors number)
-- distributed_dataset_storage: if cpu memory is enough set it False (Load all the RGB depth and gray image on every process), if cpu memory is not enough set it Ture(Load RGB depth and gray image on one process and broadcast to other process).
-- distributed_save: if Ture load the final model seperately by process, if False load the final model in one model(default)
-- default_voxel_size: set the default voxel size for initialization.
-- dpt_end_iter: step2 supervision depth end iteration.
-
-The training time may faster than the table provided by our paper, as we have optimize the mutlti-process dataloader.
+The training time may faster than the table provided in our paper, as we have optimize the multi-process dataloader.
 
 
 ## Evaluation
-Except MatrixCity, evalutaion image is saved and PSNR is also calcuate dduring training by default.
-### multi gpu
+Evalutaion image is saved and PSNR is calcuated during training by default except MartrixCity.
+ ### Rendering on multi gpu
 
 ```
 torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render.py --bsz <bsz> \ 
@@ -199,31 +201,28 @@ torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render.py --bsz <bs
 --images train/rgbs --skip_train
 ```
 
-### single gpu
+ ### Rendering on single gpu
 
 ```
 python render.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 \ 
 --model_path output/<save_path> --images train/rgbs --skip_train
 ```
 
-## Metric
+ ### Metrics
 ```
 python metrics.py -m output/<save_path>
 ```
 
 
-## Mesh extract
-### multi gpu
-if distributed_save==Ture, you can load models with same training gpu to extract mesh
-
+ ### Mesh extraction
+ #### multi gpu
 ```
 torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render_mesh.py --bsz <bsz> \ 
 -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> \
 --images train/rgbs --voxel_size 0.001 --max_depth 5 --use_depth_filter
 ```
 
-if distributed_save==False, you can load the whole model on one gpu to extract the mesh
-### single gpu
+ #### single gpu
 
 ```
 python render_mesh.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 \ 
@@ -234,9 +233,8 @@ python render_mesh.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 \
 - voxel_size: set the mesh voxel size.
 
 
-## Metric for F1 score
+ ### Metrics for F1 score
 
-eval_f1.sh
 ```
 python eval_f1.py --ply_path_pred <mesh_path> --ply_path_gt <gt_point_cloud_path> --dtau 0.5
 ```
