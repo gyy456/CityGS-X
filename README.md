@@ -170,7 +170,7 @@ bash train_xxx.sh
 - distributed_save: if Ture load the final model seperately by process, if `False` load the final model in one model(default)
 - default_voxel_size: set the default voxel size for initialization.
 - dpt_end_iter: set the end iteration of step2 depth supervision.
-- multi_view_patch_size: the multi-view pathch loss is calculated by gray image, for the less texture scene or higher reslution, larger patch_size works better.
+- multi_view_patch_size: the multi-view patchh loss is calculated by gray image, for the less texture scene or higher reslution, larger patch_size works better, but may caused longer training time.
  #### Multi gpu
 ```
 torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz> -s datasets/<scene_name> \
