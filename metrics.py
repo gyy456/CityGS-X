@@ -29,11 +29,6 @@ def readImages(renders_dir, gt_dir):
     gts = []
     image_names = []
 
-    # if True:
-    #     resize_transform = transforms.Resize(
-    #         (int(render.height / 1.2), int(render.width / 1.2)),
-    #         interpolation=transforms.InterpolationMode.BILINEAR
-    #     )
 
     for fname in os.listdir(renders_dir):
         render = Image.open(renders_dir / fname)
@@ -47,8 +42,8 @@ def readImages(renders_dir, gt_dir):
             gt = resize_transform(gt)
 
 
-        renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].cuda())
-        gts.append(tf.to_tensor(gt).unsqueeze(0)[:, :3, :, :].cuda())
+        renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :])
+        gts.append(tf.to_tensor(gt).unsqueeze(0)[:, :3, :, :])
         image_names.append(fname)
     return renders, gts, image_names
 

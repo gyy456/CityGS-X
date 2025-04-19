@@ -86,7 +86,7 @@ class Scene:
         utils.log_cpu_memory_usage("before decoding images")
 
         self.cameras_extent = scene_info.nerf_normalization["radius"]
-
+        print(f'camera_extent: {self.cameras_extent}')
         # Set image size to global variable
         orig_w, orig_h = (
             scene_info.train_cameras[0].width,

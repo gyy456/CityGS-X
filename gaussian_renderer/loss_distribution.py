@@ -3075,13 +3075,13 @@ def batched_loss_computation(
 
                 ## sample mask
                 if iterations < opt.multi_view_weight_from_iter * 1.2:
-                    patch_size, sample_num, scale, pixel_noise_th = 7, 102400, 4, 2.0
+                    patch_size, sample_num, scale, pixel_noise_th = opt.multi_view_patch_size+4, 102400, 4, 2.0
                 elif iterations < opt.multi_view_weight_from_iter * 1.5:
-                    patch_size, sample_num, scale, pixel_noise_th = 5, 102400, 4, 1.0
+                    patch_size, sample_num, scale, pixel_noise_th = opt.multi_view_patch_size+2, 102400, 4, 1.0
                 elif iterations < opt.multi_view_weight_from_iter * 2:
-                    patch_size, sample_num, scale, pixel_noise_th = 3, 102400, 2, 1.0
+                    patch_size, sample_num, scale, pixel_noise_th = opt.multi_view_patch_size, 102400, 2, 1.0
                 else:
-                    patch_size, sample_num, scale, pixel_noise_th = 3, 102400, 1, 1.0
+                    patch_size, sample_num, scale, pixel_noise_th = opt.multi_view_patch_size, 102400, 1, 1.0
 
                 if not opt.wo_use_geo_occ_aware:
                     d_mask = d_mask & (pixel_noise < pixel_noise_th)
