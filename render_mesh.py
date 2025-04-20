@@ -202,7 +202,7 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
                 # )
 
                 depth_tsdf = depth.clone().squeeze(0)
-                depth_RED = visualize_scalars(torch.log(depth.squeeze(0) + 1e-8).detach().cpu())
+                # depth_RED = visualize_scalars(torch.log(depth.squeeze(0) + 1e-8).detach().cpu())
 
                 depth = depth.detach().cpu().numpy().squeeze(0)
                 depth_i = (depth - depth.min()) / (depth.max() - depth.min() + 1e-20)
@@ -214,10 +214,10 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
 
                 # plt.imsave(os.path.join(depths_path, 'depth-' +(gt_camera.image_name + '.png') ), depth_RED)
 
-                normal = normal.permute(1,2,0)
-                normal = normal/(normal.norm(dim=-1, keepdim=True)+1.0e-8)
-                normal = normal.detach().cpu().numpy()
-                normal = ((normal+1) * 127.5).astype(np.uint8).clip(0, 255)
+                # normal = normal.permute(1,2,0)
+                # normal = normal/(normal.norm(dim=-1, keepdim=True)+1.0e-8)
+                # normal = normal.detach().cpu().numpy()
+                # normal = ((normal+1) * 127.5).astype(np.uint8).clip(0, 255)
                 # torchvision.utils.save_image(
                 #     torch.tensor(normal).permute(2,0,1)/255.0,
                 #     os.path.join(render_normal_path, gt_camera.image_name + ".png"),
@@ -225,7 +225,7 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
                 # cv2.imwrite(os.path.join(render_normal_path,  gt_camera.image_name + ".png"), normal)
 
                 if use_depth_filter:
-                    view_dir = torch.nn.functional.normalize(view.get_rays(), p=2, dim=-1)
+                    view_dir = torch.nn.functional.normalize(camera.get_rays(), p=2, dim=-1)
                     depth_normal = render_pkg["depth_normal"].permute(1,2,0)
                     depth_normal = torch.nn.functional.normalize(depth_normal, p=2, dim=-1)
                     dot = torch.sum(view_dir*depth_normal, dim=-1)
