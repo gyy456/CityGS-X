@@ -55,6 +55,17 @@ import  copy
 import matplotlib.pyplot as plt
 
 
+def get_points_from_depth(fov_camera, depth, scale=1):
+    st = int(max(int(scale/2)-1,0))
+    depth_view = depth.squeeze()[st::scale,st::scale]
+    rays_d = fov_camera.get_rays(scale=scale)
+    depth_view = depth_view[:rays_d.shape[0], :rays_d.shape[1]]
+    pts = (rays_d * depth_view[..., None]).reshape(-1,3)
+    R = torch.tensor(fov_camera.R).float().cuda()
+    T = torch.tensor(fov_camera.T).float().cuda()
+    pts = (pts-T)@R.transpose(-1,-2)
+    return pts
+
 def visualize_scalars(scalar_tensor: torch.Tensor) -> np.ndarray:
     to_use = scalar_tensor.view(-1)
     while to_use.shape[0] > 2 ** 24:
@@ -255,7 +266,7 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
                         torch.arange(W), torch.arange(H), indexing='xy')
                     pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['plane_depth'].device)
 
-                    pts = gaussians.get_points_from_depth(view, ref_depth)
+                    pts = get_points_from_depth(view, ref_depth)
                     pts_in_nearest_cam = torch.matmul(nearest_world_view_transforms[:,None,:3,:3].expand(num_n,H*W,3,3).transpose(-1,-2), 
                                                     pts[None,:,:,None].expand(num_n,H*W,3,1))[...,0] + nearest_world_view_transforms[:,None,3,:3] # b, pts, 3
 
