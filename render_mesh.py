@@ -234,15 +234,6 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
                 #     os.path.join(render_normal_path, gt_camera.image_name + ".png"),
                 # )
                 # cv2.imwrite(os.path.join(render_normal_path,  gt_camera.image_name + ".png"), normal)
-
-                if use_depth_filter:
-                    view_dir = torch.nn.functional.normalize(camera.get_rays(), p=2, dim=-1)
-                    depth_normal = render_pkg["depth_normal"].permute(1,2,0)
-                    depth_normal = torch.nn.functional.normalize(depth_normal, p=2, dim=-1)
-                    dot = torch.sum(view_dir*depth_normal, dim=-1)
-                    angle = torch.acos(dot)
-                    mask = angle > (80 / 180 * 3.14159)
-                    depth_tsdf[mask] = 0
                 depths_tsdf_fusion.append(depth_tsdf.squeeze().cpu())
     
 
