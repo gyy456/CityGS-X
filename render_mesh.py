@@ -203,10 +203,10 @@ def render_set(model_path, name, scene, iteration, views, gaussians, pipeline, b
             gt_image = torch.clamp(gt_camera.original_image / 255.0, 0.0, 1.0)
 
             if utils.GLOBAL_RANK == 0:
-                # torchvision.utils.save_image(
-                #     image,
-                #     os.path.join(render_path, gt_camera.image_name + ".png"),
-                # )
+                torchvision.utils.save_image(
+                    image,
+                    os.path.join(render_path, gt_camera.image_name + ".png"),
+                )
                 # torchvision.utils.save_image(
                 #     gt_image,
                 #     os.path.join(gts_path, gt_camera.image_name + ".png"),
