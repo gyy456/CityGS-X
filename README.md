@@ -174,20 +174,20 @@ bash train_xxx.sh
  #### Multi gpu
 ```
 torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  train.py --bsz <bsz> -s datasets/<scene_name> \
---resolution 4 --model_path output/<save_path> --iterations 100000 --images train/rgbs \
---single_view_weight_from_iter 10000  --depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 \
---dpt_loss_from_iter 10000  --multi_view_weight_from_iter 30000 --default_voxel_size 0.001 \
---dpt_end_iter 40_000 --multi_view_patch_size 10
+    --resolution 4 --model_path output/<save_path> --iterations 100000 --images train/rgbs \
+    --single_view_weight_from_iter 10000  --depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 \
+    --dpt_loss_from_iter 10000  --multi_view_weight_from_iter 30000 --default_voxel_size 0.001 \
+    --dpt_end_iter 40_000 --multi_view_patch_size 10
 ```
 
  #### Single gpu
 
 ```
 python train.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> \
---iterations 100000 --images train/rgbs --single_view_weight_from_iter 10000 \ 
---depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 --dpt_loss_from_iter 10000 \ 
---multi_view_weight_from_iter 30000 --default_voxel_size 0.001 --dpt_end_iter 40000
---multi_view_patch_size 10
+    --iterations 100000 --images train/rgbs --single_view_weight_from_iter 10000 \
+    --depth_l1_weight_final 0.01 --depth_l1_weight_init 0.5 --dpt_loss_from_iter 10000 \
+    --multi_view_weight_from_iter 30000 --default_voxel_size 0.001 --dpt_end_iter 40000 \
+    --multi_view_patch_size 10
 ```
 
 The training time may faster than the table provided in our paper, as we have optimize the multi-process dataloader.
@@ -198,16 +198,16 @@ Evalutaion image is saved and PSNR is calcuated during training by default excep
  ### Rendering on multi gpu
 
 ```
-torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render.py --bsz <bsz> \ 
--s datasets/<scene_name> --resolution 4 --model_path output/<save_path> \
---images train/rgbs --skip_train
+torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render.py --bsz <bsz> \
+    -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> \
+    --images train/rgbs --skip_train
 ```
 
  ### Rendering on single gpu
 
 ```
-python render.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 \ 
---model_path output/<save_path> --images train/rgbs --skip_train
+python render.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 \
+    --model_path output/<save_path> --images train/rgbs --skip_train
 ```
 
  ### Metrics
@@ -219,17 +219,17 @@ python metrics.py -m output/<save_path>
  ### Mesh extraction
  #### multi gpu
 ```
-torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render_mesh.py --bsz <bsz> \ 
--s datasets/<scene_name> --resolution 4 --model_path output/<save_path> \
---images train/rgbs --voxel_size 0.001 --max_depth 5 --use_depth_filter
+torchrun --standalone --nnodes=1 --nproc-per-node=<gpu_num>  render_mesh.py --bsz <bsz> \
+    -s datasets/<scene_name> --resolution 4 --model_path output/<save_path> \
+    --images train/rgbs --voxel_size 0.001 --max_depth 5 --use_depth_filter
 ```
 
  #### single gpu
 
 ```
-python render_mesh.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 \ 
---model_path output/<save_path> --images train/rgbs --voxel_size 0.001 \ 
---max_depth 5 --use_depth_filter
+python render_mesh.py --bsz <bsz> -s datasets/<scene_name> --resolution 4 \
+    --model_path output/<save_path> --images train/rgbs --voxel_size 0.001 \
+    --max_depth 5 --use_depth_filter
 ```
 
 - voxel_size: set the mesh voxel size.

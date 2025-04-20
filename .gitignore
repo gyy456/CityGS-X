@@ -51,4 +51,5 @@ huace_street
 datasets_local
 tianji_data
 street.tar
+train2.sh
 # sub_pgsr/diff-gaussian-rasterization/third_party/glm

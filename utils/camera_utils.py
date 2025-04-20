@@ -102,7 +102,7 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
             
             resolution = (round(orig_w/(args.resolution)), round(orig_h/(args.resolution)))
 
-            if ~args.not_use_multi_view_loss:
+            if not args.not_use_multi_view_loss:
                 image = Image.open(cam_info.image_path)
                 resized_image_gray = image .convert('L')
                 resized_image_gray = PILtoTorch_1(resized_image_gray, resolution)
@@ -111,7 +111,7 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
             else:
                 resized_image_gray = None
 
-            if os.path.exists(depth_path) and  ~args.not_use_dpt_loss:
+            if os.path.exists(depth_path) and not args.not_use_dpt_loss:
                 invdepthmap = cv2.imread(depth_path, -1).astype(np.float32) / float(2**16)
                 invdepthmap = cv2.resize(invdepthmap, resolution)
                 invdepthmap[invdepthmap < 0] = 0
