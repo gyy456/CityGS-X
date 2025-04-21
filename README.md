@@ -83,11 +83,11 @@ First, create a ```data/``` folder inside the project path by
 mkdir data
 ```
 
-### Get the COLMAP Result
+### Get the COLMAP result
 
 Download the datasets following [the Mega-NeRF repository](https://github.com/cmusatyalab/mega-nerf).
 
-After downloading, for Mill-19 and UrbanScene3D run the following code for each dataset: 
+After downloading, for Mill-19 and UrbanScene3D, run the following code for each dataset: 
 
 ```
 python tools/merge_val_train.py -d $DATASET_DIR(data/<scene_name>)
@@ -97,7 +97,7 @@ python tools/merge_val_train.py -d $DATASET_DIR(data/<scene_name>)
 bash tools/colmap_full.sh  $COLMAP_RESULTS_DIR  $DATASET_ROOT(data/<scene_name>)
 ```
 
-While for the MatrixCity we follow the preprocess of CityGaussianV2(https://github.com/Linketic/CityGaussian/blob/main/doc/data_preparation.md)
+While for the MatrixCity, we follow the preprocess of [CityGaussianV2](https://github.com/Linketic/CityGaussian/blob/main/doc/data_preparation.md)
 
 
 The data structure will be organised as follows:
