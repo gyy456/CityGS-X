@@ -19,17 +19,19 @@
 
 ![Teaser image](assets/cityx_tease.jpg)
 
+This repo contains official implementations of CityGS-X, ⭐ us if you like it!
+
 ## Project Updates
 - 🔥🔥 News: ```2025/4/17```: training & inference code is now available! You can try it.
   
 ## Todo List
-- [x] Release the training & inference code.
+- [x] Release the training & inference code of CityGS-X.
 - [ ] Release all model checkpoints.
 
 
 ## Installation
 
-We tested on a server configured with Ubuntu 18.04, cuda 11.6 and gcc 9.4.0. Other similar configurations should also work, but we have not verified each one individually.
+We tested CityGS-X on a server configured with Ubuntu 18.04, cuda 11.6 and gcc 9.4.0. Other similar configurations should also work, but we have not verified each one individually.
 
 1. Clone this repo:
 
@@ -97,7 +99,7 @@ python tools/merge_val_train.py -d $DATASET_DIR(data/<scene_name>)
 bash tools/colmap_full.sh  $COLMAP_RESULTS_DIR  $DATASET_ROOT(data/<scene_name>)
 ```
 
-While for the MatrixCity, we follow the preprocess of [CityGaussianV2](https://github.com/Linketic/CityGaussian/blob/main/doc/data_preparation.md)
+While for the MatrixCity, CityGS-X follow the preprocess of [CityGaussianV2](https://github.com/Linketic/CityGaussian/blob/main/doc/data_preparation.md)
 
 
 The data structure will be organised as follows:
