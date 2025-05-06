@@ -114,7 +114,6 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
             if os.path.exists(depth_path) and not args.not_use_dpt_loss:
                 invdepthmap = cv2.imread(depth_path, -1).astype(np.float32) / float(2**16)
                 invdepthmap = cv2.resize(invdepthmap, resolution)
-                invdepthmap[invdepthmap < 0] = 0
                 depth_reliable = True
                 depth_params = cam_info.depth_params
                 if depth_params is not None:
@@ -125,6 +124,7 @@ def loadCam(args, id, cam_info, decompressed_image=None, return_image=False, dep
                     #     # self.depth_mask *= 0
                     if depth_params["scale"] > 0:
                         invdepthmap = invdepthmap * depth_params["scale"] + depth_params["offset"]  #统一尺度
+                        invdepthmap[invdepthmap < 0] = 0
                 if invdepthmap.ndim != 2:
                     invdepthmap = invdepthmap[..., 0]
                 invdepthmap = torch.from_numpy(invdepthmap[None])

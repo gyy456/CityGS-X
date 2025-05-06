@@ -53,3 +53,7 @@ tianji_data
 street.tar
 train2.sh
 # sub_pgsr/diff-gaussian-rasterization/third_party/glm
+MatrixCity_result.zip
+residence_result.zip
+submodule_cityx/diff-gaussian-rasterization/diff_gaussian_rasterization.egg-info/PKG-INFO
+submodule_cityx/diff-gaussian-rasterization/diff_gaussian_rasterization.egg-info/PKG-INFO
